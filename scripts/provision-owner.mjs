@@ -71,7 +71,7 @@ try {
   }
   link.hash = `${scope === 'collection' ? 'colecao' : 'convite'}=${result.token}`;
   const contents = [
-    'Nossa Viagem — convite privado do proprietário',
+    'Nossas Viagens — convite privado do proprietário',
     scope === 'collection' ? `Coleção: ${result.collection_id}` : `Viagem: ${result.trip_id}`,
     `Convite: ${result.invite_id}`,
     `Expira em: ${result.expires_at}`,

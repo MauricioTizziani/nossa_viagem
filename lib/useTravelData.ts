@@ -6,7 +6,7 @@ import { getSupabase, initializeSession, isConfigured, resetSessionInitializatio
 import { clearSnapshot, readOfflineSnapshot, readOfflineUserId, saveSnapshot } from './storage';
 import { readAllPages, responseBelongsToRequest } from './dataQueries';
 
-export const emptyTrip: Trip = { id: '', name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: null, archived_at: null, version: 1 };
+export const emptyTrip: Trip = { id: '', name: '', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: null, archived_at: null, version: 1 };
 export const EXPENSES_MIGRATION = '202610080004_gastos.sql';
 export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';

@@ -1,4 +1,4 @@
-# Nossa Viagem
+# Nossas Viagens
 
 Organizador privado de viagens a dois, com Next.js, React, TypeScript, Supabase, Photon/OpenStreetMap e PWA. A entrada geral (`/` ou `/viagens`) abre **Minhas viagens**. Cada viagem tem seu próprio cronograma, gastos, orçamento e histórico. Não há tela de login e senha: uma sessão anônima identifica cada navegador, e convites privados autorizam outros aparelhos.
 

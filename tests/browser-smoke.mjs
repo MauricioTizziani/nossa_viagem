@@ -63,7 +63,7 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'mobile-nova-viagem.png'), fullPage: true });
   await page.getByRole('button', { name: 'Minhas viagens', exact: true }).click();
   await page.getByRole('button', { name: /Instalar aplicativo/ }).click();
-  await page.getByText('Nossa Viagem sempre por perto', { exact: true }).waitFor();
+  await page.getByText('Nossas Viagens sempre por perto', { exact: true }).waitFor();
   await noOverflow('360px install help');
   assert.deepEqual(errors, []);
   console.log('PASS Minhas viagens sem dados fictícios; filtros e pesquisa; formulário vazio; orçamento zero como rascunho; descarte confirmado; desktop e 360px; instruções da PWA.');

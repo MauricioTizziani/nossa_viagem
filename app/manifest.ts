@@ -3,15 +3,15 @@ import type { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Nossa Viagem",
-    short_name: "Nossa Viagem",
+    name: "Nossas Viagens",
+    short_name: "Nossas Viagens",
     description: "Planeje nossas próximas aventuras e guarde as memórias de cada viagem.",
     start_url: "/",
     scope: "/",
     display: "standalone",
     orientation: "any",
-    background_color: "#F7F9FC",
-    theme_color: "#3B5F86",
+    background_color: "#F8FBFB",
+    theme_color: "#28AEB9",
     lang: "pt-BR",
     categories: ["travel", "lifestyle"],
     icons: [

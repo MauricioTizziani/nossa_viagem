@@ -1,5 +1,5 @@
 /* Only the public app shell is cached. Private trip snapshots are session-scoped by the client. */
-const SHELL_CACHE = "nossa-viagem-shell-6e60d742d7b3a5e6c1e9";
+const SHELL_CACHE = "nossa-viagem-shell-80612a72f34fb15d6726";
 const SHELL_FILES = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-192.png", "/icons/maskable-512.png", "/logo.png"];
 
 function isStaticAsset(url) {
@@ -71,7 +71,7 @@ self.addEventListener("fetch", (event) => {
         }
         throw new Error("Offline shell requested.");
       } catch {
-        return (await cache.match("/")) || new Response("Conecte-se à internet e abra Nossa Viagem uma vez para preparar a consulta offline.", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+        return (await cache.match("/")) || new Response("Conecte-se à internet e abra Nossas Viagens uma vez para preparar a consulta offline.", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
     })());
     return;

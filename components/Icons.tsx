@@ -11,7 +11,7 @@ export function CategoryBadge({ type }: { type: Activity["type"] }) {
     ? "border-[#eadac5] bg-[#fbf3e6] text-[#826141]"
     : type === "Lazer"
       ? "border-[#ead8e0] bg-[#faedf2] text-[#95647a]"
-      : "border-[#d7e5f2] bg-[#eef5fc] text-[#3b5f86]";
+      : "border-[#CCEAED] bg-[#F2F7F8] text-[#125E67]";
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${color}`}>
       <CategoryIcon type={type} className="h-3.5 w-3.5" />
@@ -27,12 +27,12 @@ const EXPENSE_ICONS: Record<ExpenseCategory, LucideIcon> = {
 };
 const EXPENSE_STYLES: Record<ExpenseCategory, { badge: string; tile: string; bar: string }> = {
   "Combustível": { badge: "border-[#eadac5] bg-[#fbf3e6] text-[#826141]", tile: "bg-[#fbf1e1] text-[#a3845f]", bar: "#d9b98a" },
-  "Hospedagem": { badge: "border-[#d7e5f2] bg-[#eef5fc] text-[#3b5f86]", tile: "bg-[#eaf2fb] text-[#5c7fa3]", bar: "#8fb0d2" },
+  "Hospedagem": { badge: "border-[#CCEAED] bg-[#F2F7F8] text-[#125E67]", tile: "bg-[#EFF5F6] text-[#4D8489]", bar: "#63B9C0" },
   "Alimentação": { badge: "border-[#d7e6dc] bg-[#edf5ef] text-[#51755f]", tile: "bg-[#edf5ef] text-[#5f8470]", bar: "#9cc0a9" },
   "Transporte": { badge: "border-[#dadff0] bg-[#eef1f8] text-[#5c6890]", tile: "bg-[#eef1f8] text-[#66719a]", bar: "#a7b0d6" },
   "Passeios e lazer": { badge: "border-[#ead8e0] bg-[#faedf2] text-[#95647a]", tile: "bg-[#f9eaf0] text-[#ae8197]", bar: "#d7a9bd" },
   "Compras": { badge: "border-[#e3d9ef] bg-[#f4eefa] text-[#6f5d8c]", tile: "bg-[#f4eefa] text-[#7c6a98]", bar: "#bda9d8" },
-  "Outros": { badge: "border-[#dfe6ee] bg-[#f1f4f7] text-[#5f7389]", tile: "bg-[#f1f4f7] text-[#6b7f94]", bar: "#b4c0cd" },
+  "Outros": { badge: "border-[#dfe6ee] bg-[#f1f4f7] text-[#5f7389]", tile: "bg-[#f1f4f7] text-[#618386]", bar: "#b4c0cd" },
 };
 
 export function expenseCategoryStyle(category: ExpenseCategory) {
