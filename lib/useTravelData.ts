@@ -1,23 +1,24 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Activity, ActivityInput, Trip } from './types';
-import { captureInvitation, getSupabase, initializeSession, isConfigured, resetSessionInitialization } from './supabase';
-import { clearSnapshot, readSnapshot, readOfflineSnapshot, saveSnapshot } from './storage';
+import { clearLegacyInvitation, getSupabase, initializeSession, isConfigured, resetSessionInitialization } from './supabase';
+import { clearSnapshot, readOfflineSnapshot, saveSnapshot } from './storage';
 
 export const emptyTrip: Trip = { id: '', name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, version: 1 };
 export function friendlyError(error: unknown): string {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
   if (message.includes('VERSION_CONFLICT')) return 'Esta informação mudou em outro aparelho. Carregue a versão atual antes de salvar novamente.';
-  if (message.includes('ACCESS_DENIED')) return 'Este aparelho não tem mais acesso à viagem. Peça um novo convite ao proprietário.';
+  if (message.includes('ACCESS_DENIED')) return 'Não foi possível abrir a viagem. Tente novamente para conectar este aparelho.';
+  if (message.includes('SHARED_TRIP_NOT_CONFIGURED') || message.includes('open_shared_trip')) return 'Falta aplicar a atualização de acesso livre no Supabase: 202610080003_acesso_livre.sql.';
   if (message.includes('Failed to fetch') || message.includes('Network')) return 'Não conseguimos conectar agora. Seu formulário continua aqui; tente novamente com conexão.';
-  if (message.includes('convite') || message.includes('Conecte') || message.includes('primeira vez')) return message;
+  if (message.includes('Conecte') || message.includes('primeira vez')) return message;
   return 'Não foi possível concluir. Confira a conexão e a configuração da viagem, e tente novamente.';
 }
 export function useTravelData() {
   const [trip, setTrip] = useState<Trip>(emptyTrip);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [role, setRole] = useState<'owner' | 'member'>('member');
-  const [status, setStatus] = useState<'loading' | 'ready' | 'unconfigured' | 'unauthorized' | 'error'>(isConfigured ? 'loading' : 'unconfigured');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'unconfigured' | 'error'>(isConfigured ? 'loading' : 'unconfigured');
   const [error, setError] = useState('');
   const [online, setOnline] = useState(true);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
@@ -33,15 +34,10 @@ export function useTravelData() {
         const userId = await initializeSession();
         userRef.current = userId;
         const client = getSupabase();
-        const memberships = await client.from('trip_members').select('trip_id,role').eq('user_id', userId);
-        if (memberships.error) throw memberships.error;
-        const preferred = readSnapshot(userId)?.trip.id;
-        const membership = memberships.data?.find(m => m.trip_id === preferred) ?? memberships.data?.[0];
-        if (!membership) {
-          clearSnapshot(userId);
-          if (alive.current) { setTrip(emptyTrip); setActivities([]); setStatus('unauthorized'); setError(''); }
-          return;
-        }
+        const access = await client.rpc('open_shared_trip').single();
+        if (access.error) throw access.error;
+        const membership = access.data as { trip_id: string; role: 'owner' | 'member' };
+        if (!membership?.trip_id) throw new Error('SHARED_TRIP_NOT_CONFIGURED');
         const [tripResult, activitiesResult] = await Promise.all([
           client.from('trips').select('*').eq('id', membership.trip_id).single(),
           client.from('activities').select('*').eq('trip_id', membership.trip_id).order('starts_at').order('id'),
@@ -63,7 +59,7 @@ export function useTravelData() {
 
   useEffect(() => {
     alive.current = true;
-    captureInvitation();
+    clearLegacyInvitation();
     setOnline(navigator.onLine);
     if (isConfigured) {
       void (async () => {
@@ -92,7 +88,8 @@ export function useTravelData() {
       if (event === 'SIGNED_OUT' || (!session && event !== 'INITIAL_SESSION')) {
         if (userRef.current) clearSnapshot(userRef.current);
         resetSessionInitialization();
-        userRef.current = ''; setTrip(emptyTrip); setActivities([]); setStatus('unauthorized');
+        userRef.current = ''; setTrip(emptyTrip); setActivities([]); setStatus('error');
+        setError('A conexão deste aparelho foi reiniciada. Toque em Tentar novamente para abrir a viagem.');
       }
     }) : null;
     return () => { alive.current = false; window.removeEventListener('online', connected); window.removeEventListener('offline', disconnected); window.removeEventListener('focus', focused); document.removeEventListener('visibilitychange', visible); auth?.data.subscription.unsubscribe(); };

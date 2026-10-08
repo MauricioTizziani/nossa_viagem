@@ -25,6 +25,7 @@ const users = new Map();
 const memberships = new Map();
 const activities = new Map();
 const invitations = [];
+const rpcCalls = [];
 let buildProcess;
 let appProcess;
 let browser;
@@ -100,6 +101,12 @@ const fixture = createServer(async (request, response) => {
     if (request.method !== 'POST' || !url.pathname.startsWith('/rest/v1/rpc/')) { deny(response); return; }
     const input = await body(request);
     const rpc = url.pathname.split('/').at(-1);
+    rpcCalls.push(rpc);
+    if (rpc === 'open_shared_trip') {
+      const access = membership ?? { trip_id: tripId, role: 'member' };
+      memberships.set(user.id, access);
+      respond(response, singular ? access : [access]); return;
+    }
     if (rpc === 'redeem_trip_invite') {
       if (!['test-owner', 'test-member'].includes(input.p_token)) { deny(response, 'INVALID_INVITE', '22023', 400); return; }
       memberships.set(user.id, { trip_id: tripId, role: input.p_token === 'test-owner' ? 'owner' : 'member' });
@@ -280,11 +287,23 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE
     ? { executablePath: process.env.BROWSER_EXECUTABLE } : { channel: 'chrome' }) });
   const owner = await context({ viewport: { width: 1366, height: 900 }, timezoneId: 'America/Sao_Paulo' });
-  await owner.page.goto(`${appOrigin}/#convite=test-owner`);
-  await visibleText(owner.page, 'Só de vocês');
+  await owner.page.goto(appOrigin);
+  await visibleText(owner.page, 'Viagem compartilhada');
+  await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).waitFor({ state: 'visible' });
+  await owner.page.waitForFunction(() => !document.querySelector('.header-actions button')?.disabled);
   assert.equal(new URL(owner.page.url()).hash, '');
   assert.equal(activities.size, 0);
-  passed('Sessão anônima autoriza o aparelho pelo convite e remove o fragmento.');
+  assert.equal(memberships.size, 1);
+  assert.equal(rpcCalls.includes('redeem_trip_invite'), false);
+  passed('O endereço comum abre a viagem automaticamente, sem convite nem liberação.');
+  await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).click();
+  const sharing = owner.page.getByRole('dialog', { name: 'Leve a viagem com vocês' });
+  await owner.page.waitForFunction(expected => document.querySelector('[role="dialog"] input[readonly]')?.value === expected, `${appOrigin}/`);
+  assert.equal(await sharing.getByLabel('Link da viagem').inputValue(), `${appOrigin}/`);
+  assert.equal(await sharing.getByRole('button', { name: /Gerar|Autorizar|Revogar/ }).count(), 0);
+  await owner.page.screenshot({ path: resolve(root, 'artifacts/acesso-livre-link.png'), fullPage: true });
+  await sharing.getByRole('button', { name: 'Fechar formulário' }).click();
+  passed('Compartilhar mostra somente o endereço estável da viagem, sem token ou prazo de validade.');
 
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
   await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', osm: true });
@@ -340,7 +359,7 @@ try {
   passed('Edição atualiza centavos/horário; duplicação exige revisão; filtro por dia e modos de visualização funcionam.');
 
   const member = await context({ viewport: { width: 360, height: 800 }, timezoneId: 'Asia/Tokyo', isMobile: true });
-  await member.page.goto(`${appOrigin}/#convite=test-member`);
+  await member.page.goto(appOrigin);
   await member.page.getByRole('button', { name: 'Editar Teste passeio revisado', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
   await visibleText(member.page, '10/04/2030 10:30');
   assert.equal(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -427,11 +446,20 @@ try {
   passed('Queda de conexão preserva formulário sem gravação; SW recarrega cronograma autorizado com sessão sintética expirada.');
 
   const visitor = await context({ viewport: { width: 1280, height: 800 } });
-  await visitor.page.goto(appOrigin);
-  await visibleText(visitor.page, 'Este aparelho precisa de um convite.');
-  assert.equal(await visitor.page.getByRole('button', { name: 'Editar Teste conflito resolvido', exact: true }).count(), 0);
+  await visitor.page.goto(`${appOrigin}/#convite=obsolete-link`);
+  await visitor.page.getByRole('button', { name: 'Editar Teste conflito resolvido', exact: true }).waitFor();
+  assert.equal(new URL(visitor.page.url()).hash, '');
   assert.equal(activities.size, 2);
-  passed('Um terceiro contexto sem convite recebe cronograma vazio e orientação de acesso privado.');
+  assert.equal(new Set([...memberships.values()].map(record => record.trip_id)).size, 1);
+  assert.equal(rpcCalls.includes('redeem_trip_invite'), false);
+  await (await button(visitor.page, 'Editar Teste conflito resolvido')).click();
+  const visitorEdit = visitor.page.getByRole('dialog', { name: 'Editar atividade' });
+  await visitorEdit.getByLabel(/Nome da atividade/).fill('Teste acesso livre');
+  await visitorEdit.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
+  await visitorEdit.waitFor({ state: 'hidden' });
+  await refresh(owner.page);
+  await visibleText(owner.page, 'Teste acesso livre');
+  passed('Um terceiro aparelho entra e edita a mesma viagem sem convite; links antigos também abrem automaticamente.');
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Falha no teste de navegador.');

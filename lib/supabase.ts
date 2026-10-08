@@ -12,12 +12,11 @@ export function getSupabase(): SupabaseClient {
   return client;
 }
 let initialization: Promise<string> | null = null;
-let invitation: string | null = null;
 export function resetSessionInitialization() { initialization = null; }
-export function captureInvitation() {
+export function clearLegacyInvitation() {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const token = params.get('convite');
-  if (token) { invitation = token; window.history.replaceState(null, '', window.location.pathname + window.location.search); }
+  if (token) window.history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 export async function initializeSession(): Promise<string> {
   if (initialization) return initialization;
@@ -32,17 +31,7 @@ export async function initializeSession(): Promise<string> {
       if (result.error) throw result.error;
       session = result.data.session;
     }
-    if (!session) throw new Error('Não foi possível autorizar este aparelho. Tente novamente.');
-    if (invitation) {
-      const token = invitation;
-      const result = await supabase.rpc('redeem_trip_invite', { p_token: token });
-      if (result.error) {
-        if (!result.error.code || /fetch|network/i.test(result.error.message)) throw new Error('Network');
-        invitation = null;
-        throw new Error('Este convite expirou, foi revogado ou já foi utilizado. Peça um novo link ao proprietário.');
-      }
-      invitation = null;
-    }
+    if (!session) throw new Error('Não foi possível abrir a viagem neste aparelho. Tente novamente.');
     return session.user.id;
   })();
   try { return await initialization; } catch (error) { initialization = null; throw error; }

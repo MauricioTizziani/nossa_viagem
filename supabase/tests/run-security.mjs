@@ -365,3 +365,78 @@ test('OSM manual links are allowed only on known hosts and map paths', async () 
   assert.equal(result.osm_place_id, null);
   assert.match(result.manual_place_url, /openstreetmap/);
 });
+
+test('open access upgrade preserves records and selects one shared trip for every visitor', async () => {
+  await as('postgres');
+  const beforeTrips = (await row('select count(*)::int as n from public.trips')).n;
+  const beforeActivities = (await row('select count(*)::int as n from public.activities')).n;
+  const migration = await readFile(new URL('../migrations/202610080003_acesso_livre.sql', import.meta.url), 'utf8');
+  await db.exec(migration);
+  assert.equal((await row('select trip_id from private.shared_trip')).trip_id, tripId);
+  assert.equal((await row('select count(*)::int as n from public.trips')).n, beforeTrips);
+  assert.equal((await row('select count(*)::int as n from public.activities')).n, beforeActivities);
+  await db.exec(migration);
+  assert.equal((await row('select count(*)::int as n from private.shared_trip')).n, 1);
+  await db.exec("insert into auth.users(id) values('10000000-0000-4000-8000-000000000005'),('10000000-0000-4000-8000-000000000006')");
+});
+
+test('new anonymous sessions join automatically, without invitations, and share CRUD with version checks', async () => {
+  const first = '10000000-0000-4000-8000-000000000005';
+  const second = '10000000-0000-4000-8000-000000000006';
+  await as('authenticated', first);
+  const opened = await row('select * from public.open_shared_trip()');
+  assert.equal(opened.trip_id, tripId);
+  assert.equal(opened.role, 'member');
+  assert.deepEqual(await row('select * from public.open_shared_trip()'), opened);
+  assert.equal((await row('select count(*)::int as n from public.trip_members where user_id=$1', [first])).n, 1);
+  const id = '20000000-0000-4000-8000-000000000020';
+  const saved = await save({ id, name: 'Livre', budget: 1500 });
+  await as('authenticated', second);
+  assert.equal((await row('select * from public.open_shared_trip()')).trip_id, tripId);
+  assert.equal((await row('select name from public.activities where id=$1', [id])).name, 'Livre');
+  assert.equal((await save({ id, version: saved.version, name: 'Livre revisado' })).version, 2);
+  await assert.rejects(save({ id, version: 1 }), /VERSION_CONFLICT/);
+  const currentTrip = await row('select * from public.trips where id=$1', [tripId]);
+  const changed = await row('select * from public.update_trip($1,$2,$3,$4,$5,$6,$7,$8,$9)', [tripId,currentTrip.version,'Nossa viagem aberta',currentTrip.destination,currentTrip.start_date,currentTrip.end_date,currentTrip.timezone,currentTrip.person_one,currentTrip.person_two]);
+  assert.equal(changed.version, currentTrip.version + 1);
+  await row('select public.delete_activity($1,2)', [id]);
+  assert.equal((await row('select count(*)::int as n from public.activities where id=$1', [id])).n, 0);
+});
+
+test('open mode disables invite RPCs and keeps internal config, other trips and raw writes restricted', async () => {
+  await as('anon');
+  await fails('select * from public.open_shared_trip()');
+  await as('authenticated', '10000000-0000-4000-8000-000000000005');
+  await fails('select * from private.shared_trip');
+  await fails("update public.trips set name='Raw write' where id=$1", [tripId]);
+  await fails('select * from public.create_trip_invite($1)', [tripId]);
+  await fails('select * from public.list_trip_invites($1)', [tripId]);
+  await fails('select public.redeem_trip_invite($1)', [ownerToken]);
+  await assert.rejects(save({ trip: otherTripId }), /ACCESS_DENIED/);
+  await as('postgres');
+  assert.equal((await row("select relrowsecurity from pg_class where oid='private.shared_trip'::regclass")).relrowsecurity, true);
+});
+
+test('fresh open installation creates exactly one empty shared trip for all sessions', async () => {
+  const fresh = new PGlite({ extensions: { pgcrypto } });
+  try {
+    await fresh.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
+      create schema auth; create schema extensions; create table auth.users(id uuid primary key);
+      create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+      create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
+      grant usage on schema public,auth,extensions to anon,authenticated,service_role;
+      insert into auth.users(id) values('${owner}'),('${member}'); create publication supabase_realtime;`);
+    for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql','202610080003_acesso_livre.sql']) await fresh.exec(await readFile(new URL(`../migrations/${filename}`,import.meta.url),'utf8'));
+    const created = (await fresh.query('select * from public.trips')).rows;
+    assert.equal(created.length, 1);
+    assert.equal(created[0].destination, null);
+    await fresh.exec('set role authenticated');
+    for (const user of [owner,member]) {
+      await fresh.query("select set_config('request.jwt.claim.sub',$1,false)", [user]);
+      const opened = (await fresh.query('select * from public.open_shared_trip()')).rows[0];
+      assert.equal(opened.trip_id, created[0].id);
+    }
+    assert.equal((await fresh.query('select count(*)::int as n from public.activities')).rows[0].n, 0);
+    assert.equal((await fresh.query('select count(*)::int as n from public.trips')).rows[0].n, 1);
+  } finally { await fresh.close(); }
+});
