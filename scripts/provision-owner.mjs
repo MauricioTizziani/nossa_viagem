@@ -4,14 +4,15 @@ import { mkdir, open, writeFile, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 
 const args = process.argv.slice(2);
-const allowed = new Set(['--trip', '--output', '--help']);
+const allowed = new Set(['--trip', '--scope', '--output', '--help']);
 const options = {};
 for (let index = 0; index < args.length; index += 1) {
   const key = args[index];
   if (!allowed.has(key)) throw new Error(`Opção desconhecida: ${key}`);
   if (key === '--help') {
-    console.log('Uso: node --env-file=.env.owner scripts/provision-owner.mjs [--trip UUID] [--output caminho]');
+    console.log('Uso: node --env-file=.env.owner scripts/provision-owner.mjs [--trip UUID] [--scope trip|collection] [--output caminho]');
     console.log('Sem --trip: cria uma viagem vazia. Com --trip: recupera o acesso do proprietário à mesma viagem.');
+    console.log('--scope collection exige --trip e autoriza explicitamente a coleção privada da viagem, incluindo viagens futuras.');
     process.exit(0);
   }
   const value = args[++index];
@@ -37,6 +38,9 @@ try {
   if (tripId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tripId)) {
     throw new Error('--trip deve ser o UUID da viagem existente.');
   }
+  const scope = options['--scope'] ?? 'trip';
+  if (!['trip', 'collection'].includes(scope)) throw new Error('--scope deve ser trip ou collection.');
+  if (scope === 'collection' && !tripId) throw new Error('--scope collection exige --trip com o UUID da viagem existente.');
 
   const output = resolve(options['--output'] ?? '.private/owner-invite.txt');
   await mkdir(dirname(output), { recursive: true, mode: 0o700 });
@@ -49,10 +53,11 @@ try {
   const headers = { apikey: secret, 'Content-Type': 'application/json' };
   // Current sb_secret keys are not JWTs and must travel in apikey, not Bearer.
   if (!secret.startsWith('sb_secret_')) headers.Authorization = `Bearer ${secret}`;
-  const response = await fetch(`${supabaseUrl.origin}${supabaseUrl.pathname.replace(/\/$/, '')}/rest/v1/rpc/provision_trip_owner`, {
+  const procedure = scope === 'collection' ? 'provision_collection_owner' : 'provision_trip_owner';
+  const response = await fetch(`${supabaseUrl.origin}${supabaseUrl.pathname.replace(/\/$/, '')}/rest/v1/rpc/${procedure}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ p_trip_id: tripId, p_name: 'Nossa Viagem' }),
+    body: JSON.stringify(scope === 'collection' ? { p_trip_id: tripId } : { p_trip_id: tripId, p_name: 'Nossa Viagem' }),
     redirect: 'error',
     signal: AbortSignal.timeout(20000),
   });
@@ -60,16 +65,19 @@ try {
   if (!response.ok) throw new Error(`O procedimento não foi confirmado (HTTP ${response.status}). Confira a migração, a URL e a chave administrativa.`);
   const payload = await response.json();
   const result = Array.isArray(payload) ? payload[0] : payload;
-  if (!result || !/^[0-9a-f]{64}$/.test(result.token ?? '') || !result.trip_id || !result.expires_at) {
+  const authorizedId = scope === 'collection' ? result?.collection_id : result?.trip_id;
+  if (!result || !/^[0-9a-f]{64}$/.test(result.token ?? '') || !authorizedId || !result.expires_at) {
     throw new Error('Resposta inesperada do procedimento; não foi possível preparar o convite.');
   }
-  link.hash = `convite=${result.token}`;
+  link.hash = `${scope === 'collection' ? 'colecao' : 'convite'}=${result.token}`;
   const contents = [
     'Nossa Viagem — convite privado do proprietário',
-    `Viagem: ${result.trip_id}`,
+    scope === 'collection' ? `Coleção: ${result.collection_id}` : `Viagem: ${result.trip_id}`,
     `Convite: ${result.invite_id}`,
     `Expira em: ${result.expires_at}`,
-    'Abra o link abaixo em UM aparelho do proprietário. O link autoriza consultar e editar a viagem.',
+    scope === 'collection'
+      ? 'Abra o link abaixo em UM aparelho do proprietário. Este convite autoriza explicitamente TODAS as viagens atuais e futuras da coleção.'
+      : 'Abra o link abaixo em UM aparelho do proprietário. O link autoriza consultar e editar somente esta viagem.',
     link.toString(),
     '',
     'Guarde o ID da viagem para recuperação. Apague este arquivo depois de abrir o convite.',
@@ -78,8 +86,9 @@ try {
   ].join('\n');
   await writeFile(output, contents, { encoding: 'utf8', mode: 0o600 });
   reservedFile = undefined;
-  console.log(tripId ? 'Convite de recuperação criado para a viagem existente.' : 'Viagem vazia criada. Nenhum nome, destino, data ou atividade foi inventado.');
-  console.log(`ID da viagem: ${result.trip_id}`);
+  console.log(scope === 'collection' ? 'Convite de recuperação criado com acesso explícito à coleção privada e suas viagens futuras.'
+    : tripId ? 'Convite de recuperação criado para a viagem existente.' : 'Viagem vazia criada. Nenhum nome, destino, data ou atividade foi inventado.');
+  console.log(scope === 'collection' ? `ID da coleção: ${result.collection_id}` : `ID da viagem: ${result.trip_id}`);
   console.log(`O link privado foi salvo apenas em: ${output}`);
   console.log('Abra o arquivo local, use o convite em um aparelho e depois apague o arquivo.');
 } catch (error) {

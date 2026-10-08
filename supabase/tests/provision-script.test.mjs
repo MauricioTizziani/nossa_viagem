@@ -89,6 +89,42 @@ test('recovery targets the existing trip and legacy service JWT headers remain s
   });
 });
 
+test('collection recovery requires an explicit scope and writes a distinct collection invite fragment', async () => {
+  let requestBody;
+  const collectionId = '60000000-0000-4000-8000-000000000001';
+  await fixture((request, response) => {
+    assert.equal(request.url, '/rest/v1/rpc/provision_collection_owner');
+    let body = '';
+    request.on('data', (data) => { body += data; });
+    request.on('end', () => {
+      requestBody = JSON.parse(body);
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify([{ collection_id: collectionId, invite_id: inviteId, token, expires_at: '2026-10-09T12:00:00Z' }]));
+    });
+  }, async (directory, endpoint) => {
+    const result = await execute(directory, endpoint, ['--scope', 'collection', '--trip', tripId]);
+    assert.equal(result.code, 0);
+    assert.deepEqual(requestBody, { p_trip_id: tripId });
+    const contents = await readFile(join(directory, 'invite.txt'), 'utf8');
+    assert.ok(contents.includes(`http://localhost:3000/#colecao=${token}`));
+    assert.ok(contents.includes(collectionId));
+    assert.match(contents, /TODAS as viagens atuais e futuras/);
+    assert.ok(!`${result.stdout}${result.stderr}`.includes(token));
+  });
+});
+
+test('collection recovery without a trip and invalid scopes are rejected before a request', async () => {
+  let requests = 0;
+  await fixture((_request,response) => { requests += 1; success(response); }, async (directory,endpoint) => {
+    for (const args of [['--scope','collection'],['--scope','public','--trip',tripId]]) {
+      const result = await execute(directory,endpoint,args);
+      assert.equal(result.code,1);
+      await assert.rejects(access(join(directory,'invite.txt')),/ENOENT/);
+    }
+    assert.equal(requests,0);
+  });
+});
+
 test('failed responses neither log their secret payload nor leave a token output file', async () => {
   await fixture((_request, response) => {
     response.writeHead(403, { 'Content-Type': 'application/json' });

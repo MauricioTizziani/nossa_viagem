@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/",
     name: "Nossa Viagem",
     short_name: "Nossa Viagem",
-    description: "Pequenos planos, grandes memórias. O cronograma da nossa próxima aventura.",
+    description: "Planeje nossas próximas aventuras e guarde as memórias de cada viagem.",
     start_url: "/",
     scope: "/",
     display: "standalone",

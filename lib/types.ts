@@ -13,9 +13,46 @@ export interface Trip {
   person_two: string | null;
   /** Couple's reference budget in integer centavos. Null means not informed; zero is a real budget. Never reduced by activities or expenses. */
   initial_budget_cents: number | null;
+  collection_id?: string | null;
+  archived_at?: string | null;
   version: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export type TripInput = Pick<Trip, 'name' | 'destination' | 'start_date' | 'end_date' | 'timezone' | 'person_one' | 'person_two' | 'initial_budget_cents'>;
+export type AccessRole = 'owner' | 'member';
+export type TripListFilter = 'all' | 'upcoming' | 'ongoing' | 'past' | 'archived' | 'undated';
+export interface TripCard extends Trip {
+  total_spent_cents: number;
+  trip_role: AccessRole;
+  collection_role: AccessRole | null;
+  /** True after this device loaded the full schedule and expenses of this trip. */
+  offline_available?: boolean;
+  card_synced_at?: string;
+  synced_at?: string | null;
+}
+export interface AuthorizedCollection {
+  id: string;
+  role: AccessRole;
+  created_at?: string;
+}
+export interface Invitation {
+  id: string;
+  role: AccessRole;
+  expires_at: string;
+  max_uses: number;
+  use_count: number;
+  created_at: string;
+  revoked_at: string | null;
+  last_used_at?: string | null;
+}
+export interface InvitationCreated {
+  invite_id: string;
+  token: string;
+  expires_at: string;
+  max_uses: number;
+  role: AccessRole;
 }
 
 export interface PlaceValue {

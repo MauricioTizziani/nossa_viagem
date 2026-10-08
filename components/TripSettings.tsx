@@ -6,8 +6,8 @@ import { INITIAL_BUDGET_HELP, UNDEFINED_BUDGET_LABEL, formatBudgetInput, parseIn
 import { validateTripInput } from '@/lib/domain';
 import { friendlyError } from '@/lib/useTravelData';
 const timezones = ['America/Sao_Paulo', 'America/Manaus', 'America/Fortaleza', 'America/Rio_Branco', 'America/New_York', 'Europe/Lisbon', 'Europe/Paris', 'Europe/London', 'Asia/Tokyo', 'Australia/Sydney'];
-export default function TripSettings({ trip, online, canShare, focusBudget = false, onSave, onShare, onDirtyChange, onLoadLatest, onBudgetFocused }: {
-  trip: Trip; online: boolean; canShare: boolean; focusBudget?: boolean;
+export default function TripSettings({ trip, online, canShare, canSave = true, mode = 'edit', focusBudget = false, onSave, onShare, onDirtyChange, onLoadLatest, onBudgetFocused }: {
+  trip: Trip; online: boolean; canShare: boolean; canSave?: boolean; mode?: 'create' | 'edit'; focusBudget?: boolean;
   onSave: (values: Omit<Trip, 'id' | 'version'>, version: number, options: { touchBudget: boolean }) => Promise<void>;
   onShare: () => void; onDirtyChange: (value: boolean) => void;
   onLoadLatest: () => Promise<Trip>;
@@ -15,7 +15,7 @@ export default function TripSettings({ trip, online, canShare, focusBudget = fal
 }) {
   const [values, setValues] = useState(trip);
   const [budgetText, setBudgetText] = useState(trip.initial_budget_cents === null ? '' : formatBudgetInput(trip.initial_budget_cents));
-  const [defining, setDefining] = useState(focusBudget);
+  const [defining, setDefining] = useState(mode === 'create' || focusBudget);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -41,20 +41,22 @@ export default function TripSettings({ trip, online, canShare, focusBudget = fal
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (locked.current) return;
     setError(''); setSuccess(false);
+    if (!online) { setError('Conecte-se para confirmar as alterações da viagem.'); return; }
+    if (!canSave) { setError('Conecte o aplicativo ao Supabase e aguarde a sincronização para confirmar o cadastro.'); return; }
     if (!values.name.trim()) { setError('Dê um nome à viagem.'); return; }
     if (values.start_date && values.end_date && values.end_date < values.start_date) { setError('A data de término deve ser igual ou posterior à data de início.'); return; }
     try { new Intl.DateTimeFormat('pt-BR', { timeZone: values.timezone }); } catch { setError('Escolha um fuso horário válido.'); return; }
     let cents: number | null;
     try { cents = parseInitialBudgetCents(budgetText); }
     catch (err) { setError(err instanceof Error ? err.message : 'Informe um orçamento inicial válido.'); return; }
-    const requireInitialBudget = defining || values.initial_budget_cents !== null;
+    const requireInitialBudget = mode === 'create' || defining || values.initial_budget_cents !== null;
     if (requireInitialBudget && cents === null) { setError('Informe o orçamento inicial da viagem.'); budgetRef.current?.focus(); return; }
     locked.current = true; setSaving(true);
     try {
       const { id: _id, version: _version, ...input } = values;
       const validated = validateTripInput({ ...input, name: values.name.trim(), destination: values.destination.trim(), person_one: values.person_one?.trim() || null, person_two: values.person_two?.trim() || null, initial_budget_cents: cents }, { requireInitialBudget });
       await onSave(validated, values.version, { touchBudget: cents !== null });
-      setDefining(false); setDirty(false); setSuccess(true);
+      setDefining(mode === 'create'); setDirty(false); setSuccess(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
       setError(/Informe|Escolha|deve ter|não pode|fuso|orçamento/i.test(message) && !/Failed to fetch|Network|VERSION|supabase/i.test(message) ? message : friendlyError(err));
@@ -69,14 +71,14 @@ export default function TripSettings({ trip, online, canShare, focusBudget = fal
       <div className="fields-two"><label className="field-label">Data de início<input type="date" value={values.start_date ?? ''} onChange={e => change('start_date', e.target.value || null)}/></label><label className="field-label">Data de término<input type="date" value={values.end_date ?? ''} onChange={e => change('end_date', e.target.value || null)}/></label></div>
       <div className="fields-two"><label className="field-label">Seu nome <span className="optional">opcional</span><input maxLength={80} value={values.person_one ?? ''} onChange={e => change('person_one', e.target.value)} placeholder="Primeiro nome"/></label><label className="field-label">Nome do seu amor <span className="optional">opcional</span><input maxLength={80} value={values.person_two ?? ''} onChange={e => change('person_two', e.target.value)} placeholder="Primeiro nome"/></label></div>
       <div>
-        <label className="field-label">Orçamento inicial da viagem {(defining || values.initial_budget_cents !== null) && <span className="required">*</span>}{values.initial_budget_cents === null && !budgetText.trim() && <span className="optional">{UNDEFINED_BUDGET_LABEL}</span>}<div className="input-icon"><span>R$</span><input ref={budgetRef} inputMode="decimal" autoComplete="off" placeholder="Ex.: 2.000,00" maxLength={20} value={budgetText} aria-describedby="initial-budget-hint" onChange={e => changeBudget(e.target.value)} onBlur={() => { try { const cents = parseInitialBudgetCents(budgetText); if (cents !== null) setBudgetText(formatBudgetInput(cents)); } catch { /* Keep the typed text so it can be corrected. */ } }}/></div><span id="initial-budget-hint" className="field-hint">{INITIAL_BUDGET_HELP}</span></label>
-        {values.initial_budget_cents === null && <button type="button" className="text-button" onClick={defineBudget}>Definir orçamento</button>}
+        <label className="field-label">Orçamento inicial da viagem {(defining || values.initial_budget_cents !== null) && <span className="required">*</span>}{mode === 'edit' && values.initial_budget_cents === null && !budgetText.trim() && <span className="optional">{UNDEFINED_BUDGET_LABEL}</span>}<div className="input-icon"><span>R$</span><input ref={budgetRef} required={mode === 'create' || defining || values.initial_budget_cents !== null} inputMode="decimal" autoComplete="off" placeholder="Ex.: 2.000,00" maxLength={20} value={budgetText} aria-describedby="initial-budget-hint" onChange={e => changeBudget(e.target.value)} onBlur={() => { try { const cents = parseInitialBudgetCents(budgetText); if (cents !== null) setBudgetText(formatBudgetInput(cents)); } catch { /* Keep the typed text so it can be corrected. */ } }}/></div><span id="initial-budget-hint" className="field-hint">{INITIAL_BUDGET_HELP}{mode === 'create' && ' Você pode informar zero; deixar vazio não confirma um orçamento.'}</span></label>
+        {mode === 'edit' && values.initial_budget_cents === null && <button type="button" className="text-button" onClick={defineBudget}>Definir orçamento</button>}
       </div>
-      <label className="field-label">Fuso horário<select value={values.timezone} onChange={e => change('timezone', e.target.value)}>{tzOptions.map(tz => <option key={tz} value={tz}>{tz.replaceAll('_', ' ')}</option>)}</select><span className="field-hint">O cronograma usa este fuso em todos os aparelhos. Alterar o fuso muda a exibição, mantendo os instantes das atividades.</span></label>
+      <label className="field-label">Fuso horário<input list="trip-timezones" maxLength={100} value={values.timezone} onChange={e => change('timezone', e.target.value)} autoComplete="off" required/><datalist id="trip-timezones">{tzOptions.map(tz => <option key={tz} value={tz}/>)}</datalist><span className="field-hint">Use um fuso como America/Sao_Paulo ou Europe/Lisbon. Ele define os dias do cronograma e a situação da viagem em todos os aparelhos.</span></label>
       {!online && <p className="notice">Você está offline. As alterações deste formulário serão mantidas enquanto ele estiver aberto.</p>}
       {error && <div role="alert" className="notice notice-error"><p>{error}</p>{error.includes('outro aparelho') && <button type="button" className="text-button" onClick={async () => { if (window.confirm('Descartar este rascunho e carregar as configurações atuais?')) { try { const current = await onLoadLatest(); setValues(current); setBudgetText(current.initial_budget_cents === null ? '' : formatBudgetInput(current.initial_budget_cents)); setDefining(current.initial_budget_cents !== null); setDirty(true); setError(''); } catch (err) { setError(friendlyError(err)); } } }}><RefreshCw size={16}/>Carregar versão atual</button>}</div>}
-      {success && <p className="success-message" role="status"><Check size={16}/>Sua viagem foi atualizada.</p>}
-      <div className="form-footer"><button className="button-primary" type="submit" disabled={saving || !online}>{saving ? <LoaderCircle size={18} className="spin"/> : <Check size={18}/>} {saving ? 'Salvando…' : 'Salvar nossa viagem'}</button></div>
+      {success && <p className="success-message" role="status"><Check size={16}/>{mode === 'create' ? 'Viagem criada. Preparando sua aventura…' : 'Sua viagem foi atualizada.'}</p>}
+      <div className="form-footer"><button className="button-primary" type="submit" disabled={saving || !online || !canSave}>{saving ? <LoaderCircle size={18} className="spin"/> : <Check size={18}/>} {saving ? 'Salvando…' : mode === 'create' ? 'Criar viagem' : 'Salvar nossa viagem'}</button></div>
     </fieldset></form>
-  </section><aside className="settings-aside"><section className="paper-card share-card"><span className="section-icon pink-icon"><Heart size={23}/></span><h3>Uma viagem, vários aparelhos</h3><p>Abra o mesmo endereço no computador e nos celulares de vocês. Os planos ficam juntos automaticamente.</p><button className="button-secondary" onClick={onShare} disabled={!canShare}><Share2 size={17}/>Compartilhar viagem</button><p className="field-hint">Quem tiver o endereço poderá consultar e editar a viagem, sem cadastro ou convite.</p></section><div className="quiet-note"><CalendarDays size={20}/><p>Não precisa decidir tudo agora.<br/>Os melhores planos também têm espaço para o inesperado.</p></div></aside></div>;
+  </section><aside className="settings-aside"><section className="paper-card share-card"><span className="section-icon pink-icon"><Heart size={23}/></span><h3>{mode === 'create' ? 'Uma nova história a dois' : 'Uma viagem, vários aparelhos'}</h3><p>{mode === 'create' ? 'A nova viagem começa com cronograma e gastos vazios. Suas outras aventuras e memórias continuam guardadas.' : 'Autorize outro aparelho por um convite privado para acompanhar os planos juntos, sem login e senha.'}</p>{mode === 'edit' && <><button className="button-secondary" onClick={onShare} disabled={!canShare}><Share2 size={17}/>Convidar outro aparelho</button><p className="field-hint">O endereço da viagem sozinho não concede acesso. Somente responsáveis pela viagem ou coleção podem criar convites.</p></>}</section><div className="quiet-note"><CalendarDays size={20}/><p>Não precisa decidir tudo agora.<br/>Os melhores planos também têm espaço para o inesperado.</p></div></aside></div>;
 }

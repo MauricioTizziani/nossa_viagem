@@ -19,14 +19,26 @@ const appOrigin = 'http://127.0.0.1:3100';
 const photonQueries = [];
 const now = () => new Date().toISOString();
 const tripId = '60000000-0000-4000-8000-000000000001';
+const collectionId = '70000000-0000-4000-8000-000000000001';
+const ownerToken = 'a'.repeat(64);
+const memberToken = 'b'.repeat(64);
 const trip = { id: tripId, name: 'Nossa Viagem', destination: null, start_date: null, end_date: null,
-  timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, version: 1, created_at: now(), updated_at: now() };
+  timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: collectionId,
+  archived_at: null, version: 1, created_at: now(), updated_at: now() };
+const trips = new Map([[tripId, trip]]);
+const collections = new Map([[collectionId, { id: collectionId, created_at: now() }]]);
 const users = new Map();
 const memberships = new Map();
+const collectionMemberships = new Map();
 const activities = new Map();
 const expenses = new Map();
-const invitations = [];
+const invitations = [
+  { id: randomUUID(), scope: 'collection', target: collectionId, token: ownerToken, role: 'owner', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
+  { id: randomUUID(), scope: 'trip', target: tripId, token: memberToken, role: 'member', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
+];
 const rpcCalls = [];
+const delayedReads = new Map();
+const delayedRpcs = new Map();
 let buildProcess;
 let appProcess;
 let browser;
@@ -62,6 +74,22 @@ async function body(request) {
   for await (const chunk of request) chunks.push(chunk);
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
 }
+function memberKey(userId, target) { return `${userId}:${target}`; }
+function collectionRole(userId, id) { return collectionMemberships.get(memberKey(userId, id))?.role ?? null; }
+function tripRole(userId, id) {
+  const direct = memberships.get(memberKey(userId,id))?.role;
+  const shared = collectionRole(userId,trips.get(id)?.collection_id);
+  return direct === 'owner' || shared === 'owner' ? 'owner' : direct || shared ? 'member' : null;
+}
+function tripPhase(value) {
+  if (!value.start_date || !value.end_date) return 'undated';
+  const date = new Intl.DateTimeFormat('en-CA',{ timeZone:value.timezone,year:'numeric',month:'2-digit',day:'2-digit' }).format(new Date());
+  return date < value.start_date ? 'upcoming' : date > value.end_date ? 'past' : 'ongoing';
+}
+function safeInvite(invite) {
+  const { id,role,expires_at,max_uses,use_count,revoked_at,created_at,last_used_at } = invite;
+  return { id,role,expires_at,max_uses,use_count,revoked_at,created_at,last_used_at };
+}
 const fixture = createServer(async (request, response) => {
   try {
     if (request.method === 'OPTIONS') { respond(response, {}, 200); return; }
@@ -82,23 +110,28 @@ const fixture = createServer(async (request, response) => {
     const user = identity(request);
     if (url.pathname === '/auth/v1/user') { user ? respond(response, user) : deny(response); return; }
     if (!user) { deny(response); return; }
-    const membership = memberships.get(user.id);
     const singular = request.headers.accept?.includes('application/vnd.pgrst.object+json');
     if (request.method === 'GET') {
       let records;
-      if (url.pathname === '/rest/v1/trip_members') records = membership ? [{ ...membership, user_id: user.id }] : [];
-      else if (url.pathname === '/rest/v1/trips') records = membership ? [{ ...trip }] : [];
+      if (url.pathname === '/rest/v1/trip_members') records = [...memberships.values()].filter(item=>item.user_id===user.id);
+      else if (url.pathname === '/rest/v1/collection_members') records = [...collectionMemberships.values()].filter(item=>item.user_id===user.id);
+      else if (url.pathname === '/rest/v1/trips') records = [...trips.values()].filter(value=>tripRole(user.id,value.id)).map(value=>({ ...value }));
       else if (url.pathname === '/rest/v1/activities') {
-        records = membership ? [...activities.values()].sort((a, b) => a.starts_at.localeCompare(b.starts_at) || a.id.localeCompare(b.id)) : [];
-        const id = url.searchParams.get('id')?.replace(/^eq\./, '');
-        if (id) records = records.filter((record) => record.id === id);
+        records = [...activities.values()].filter(value=>tripRole(user.id,value.trip_id)).sort((a,b)=>a.id.localeCompare(b.id));
       }
       else if (url.pathname === '/rest/v1/trip_expenses') {
-        records = membership ? [...expenses.values()].sort((a, b) => b.expense_date.localeCompare(a.expense_date) || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)) : [];
-        const id = url.searchParams.get('id')?.replace(/^eq\./, '');
-        if (id) records = records.filter((record) => record.id === id);
+        records = [...expenses.values()].filter(value=>tripRole(user.id,value.trip_id)).sort((a,b)=>a.id.localeCompare(b.id));
       }
       if (records) {
+        for(const key of ['id','trip_id','user_id']) {
+          const expected = url.searchParams.get(key)?.replace(/^eq\./,'');
+          if(expected) records=records.filter(item=>item[key]===expected);
+        }
+        const tripFilter = url.searchParams.get('trip_id')?.replace(/^eq\./,'');
+        if (tripFilter && delayedReads.has(tripFilter)) await new Promise(resolve=>setTimeout(resolve,delayedReads.get(tripFilter)));
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const limit = Number(url.searchParams.get('limit') ?? records.length);
+        records = records.slice(offset,offset+limit);
         if (singular && records.length !== 1) deny(response, 'Record not found', 'PGRST116', 406);
         else respond(response, singular ? records[0] : records);
         return;
@@ -108,76 +141,122 @@ const fixture = createServer(async (request, response) => {
     const input = await body(request);
     const rpc = url.pathname.split('/').at(-1);
     rpcCalls.push(rpc);
-    if (rpc === 'open_shared_trip') {
-      const access = membership ?? { trip_id: tripId, role: 'member' };
-      memberships.set(user.id, access);
-      respond(response, singular ? access : [access]); return;
+    if(delayedRpcs.has(rpc)) await new Promise(resolve=>setTimeout(resolve,delayedRpcs.get(rpc)));
+    if (rpc === 'open_shared_trip') { deny(response,'PRIVATE_ACCESS_REQUIRED'); return; }
+    if (rpc === 'redeem_trip_invite' || rpc === 'redeem_collection_invite') {
+      const scope=rpc==='redeem_trip_invite'?'trip':'collection';
+      const invite=invitations.find(item=>item.token===input.p_token && item.scope===scope);
+      if(!invite || invite.revoked_at || Date.parse(invite.expires_at)<=Date.now() || (!invite.users.has(user.id) && invite.use_count>=invite.max_uses)) { deny(response,'INVALID_INVITE','22023',400); return; }
+      const store=scope==='trip'?memberships:collectionMemberships;
+      const key=memberKey(user.id,invite.target);
+      const prior=store.get(key);
+      store.set(key,{ user_id:user.id,[scope==='trip'?'trip_id':'collection_id']:invite.target,role:prior?.role==='owner'?'owner':invite.role });
+      if(!invite.users.has(user.id)) { invite.users.add(user.id); invite.use_count++; invite.last_used_at=now(); }
+      respond(response,invite.target); return;
     }
-    if (rpc === 'redeem_trip_invite') {
-      if (!['test-owner', 'test-member'].includes(input.p_token)) { deny(response, 'INVALID_INVITE', '22023', 400); return; }
-      memberships.set(user.id, { trip_id: tripId, role: input.p_token === 'test-owner' ? 'owner' : 'member' });
-      respond(response, tripId); return;
+    if(rpc==='list_authorized_collections') {
+      respond(response,[...collectionMemberships.values()].filter(item=>item.user_id===user.id).map(item=>({ ...collections.get(item.collection_id),role:item.role }))); return;
     }
-    if (!membership) { deny(response); return; }
+    if(rpc==='list_authorized_trips') {
+      const search=String(input.p_search??'').trim().toLocaleLowerCase();
+      const filter=input.p_filter??'all';
+      const records=[...trips.values()].filter(value=>tripRole(user.id,value.id))
+        .filter(value=>filter==='archived'?value.archived_at:!value.archived_at && (filter==='all'||tripPhase(value)===filter))
+        .filter(value=>!search||`${value.name} ${value.destination??''}`.toLocaleLowerCase().includes(search))
+        .sort((a,b)=>a.id.localeCompare(b.id)).map(value=>({ ...value,
+          total_spent_cents:[...expenses.values()].filter(item=>item.trip_id===value.id).reduce((sum,item)=>sum+item.amount_cents,0),
+          trip_role:tripRole(user.id,value.id),collection_role:collectionRole(user.id,value.collection_id) }));
+      respond(response,records.slice(input.p_offset??0,(input.p_offset??0)+(input.p_limit??50))); return;
+    }
+    if(rpc==='create_private_trip') {
+      if(input.p_initial_budget_cents==null||!Number.isInteger(input.p_initial_budget_cents)||input.p_initial_budget_cents<0) { deny(response,'INVALID_INITIAL_BUDGET','22023',400); return; }
+      if(!input.p_name?.trim()||(input.p_start_date&&input.p_end_date&&input.p_end_date<input.p_start_date)) { deny(response,'new row violates check constraint','23514',400); return; }
+      const existing=trips.get(input.p_id);
+      if(existing) { if(tripRole(user.id,existing.id)!=='owner') deny(response); else respond(response,existing); return; }
+      let target=input.p_collection_id;
+      if(target&&!collectionRole(user.id,target)) { deny(response); return; }
+      if(!target) { target=randomUUID(); collections.set(target,{ id:target,created_at:now() }); collectionMemberships.set(memberKey(user.id,target),{ user_id:user.id,collection_id:target,role:'owner' }); }
+      const created={ id:input.p_id,collection_id:target,name:input.p_name.trim(),destination:input.p_destination?.trim()||null,
+        start_date:input.p_start_date,end_date:input.p_end_date,timezone:input.p_timezone,person_one:input.p_person_one,person_two:input.p_person_two,
+        initial_budget_cents:input.p_initial_budget_cents,archived_at:null,version:1,created_at:now(),updated_at:now() };
+      trips.set(created.id,created); memberships.set(memberKey(user.id,created.id),{ user_id:user.id,trip_id:created.id,role:'owner' });
+      respond(response,created); return;
+    }
+    if(rpc==='set_trip_archived') {
+      const target=trips.get(input.p_id);
+      if(!target||!tripRole(user.id,target.id)) { deny(response); return; }
+      if(target.version!==input.p_expected_version) { deny(response,'VERSION_CONFLICT','40001',409); return; }
+      target.archived_at=input.p_archived?target.archived_at??now():null; target.version++; target.updated_at=now(); respond(response,{...target}); return;
+    }
     if (rpc === 'save_activity') {
-      if (input.p_trip_id !== tripId) { deny(response); return; }
+      if (!tripRole(user.id,input.p_trip_id)) { deny(response); return; }
       const previous = activities.get(input.p_id);
-      if ((previous && previous.version !== input.p_expected_version) || (!previous && input.p_expected_version !== 0)) {
+      if ((previous && (previous.trip_id!==input.p_trip_id || previous.version !== input.p_expected_version)) || (!previous && input.p_expected_version !== 0)) {
         deny(response, 'VERSION_CONFLICT', '40001', 409); return;
       }
-      const record = { id: input.p_id, trip_id: tripId, starts_at: input.p_starts_at,
+      const record = { id: input.p_id, trip_id: input.p_trip_id, starts_at: input.p_starts_at,
         budget_cents: input.p_budget_cents, name: input.p_name.trim(), type: input.p_type,
         place_id: input.p_place_id, manual_place_name: input.p_manual_place_name,
         manual_place_address: input.p_manual_place_address, manual_place_url: input.p_manual_place_url,
         osm_place_id: input.p_osm_place_id, osm_place_name: input.p_osm_place_name, osm_place_address: input.p_osm_place_address,
         osm_latitude: input.p_osm_latitude, osm_longitude: input.p_osm_longitude,
         version: (previous?.version ?? 0) + 1, created_at: previous?.created_at ?? now(), updated_at: now() };
-      activities.set(record.id, record); trip.updated_at = now(); respond(response, record); return;
+      activities.set(record.id, record); trips.get(record.trip_id).updated_at = now(); respond(response, record); return;
     }
     if (rpc === 'delete_activity') {
       const record = activities.get(input.p_id);
+      if(!record||!tripRole(user.id,record.trip_id)) { deny(response); return; }
       if (!record || record.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
       activities.delete(input.p_id);
       // Mirrors the database foreign key: linked expenses are preserved and only unlinked.
       for (const expense of expenses.values()) if (expense.activity_id === input.p_id) expense.activity_id = null;
-      trip.updated_at = now(); respond(response, null); return;
+      trips.get(record.trip_id).updated_at = now(); respond(response, null); return;
     }
     if (rpc === 'save_expense') {
-      if (input.p_trip_id !== tripId) { deny(response); return; }
+      if (!tripRole(user.id,input.p_trip_id)) { deny(response); return; }
       const previous = expenses.get(input.p_id);
-      if ((previous && previous.version !== input.p_expected_version) || (!previous && input.p_expected_version !== 0)) {
+      if ((previous && (previous.trip_id!==input.p_trip_id || previous.version !== input.p_expected_version)) || (!previous && input.p_expected_version !== 0)) {
         deny(response, 'VERSION_CONFLICT', '40001', 409); return;
       }
-      if (input.p_activity_id && activities.get(input.p_activity_id)?.trip_id !== tripId) { deny(response, 'EXPENSE_ACTIVITY_MISMATCH', '23503', 409); return; }
+      if (input.p_activity_id && activities.get(input.p_activity_id)?.trip_id !== input.p_trip_id) { deny(response, 'EXPENSE_ACTIVITY_MISMATCH', '23503', 409); return; }
       if (!(Number.isInteger(input.p_amount_cents) && input.p_amount_cents > 0) || !input.p_description?.trim()) { deny(response, 'new row violates check constraint', '23514', 400); return; }
-      const record = { id: input.p_id, trip_id: tripId, description: input.p_description.trim(), category: input.p_category,
+      const record = { id: input.p_id, trip_id: input.p_trip_id, description: input.p_description.trim(), category: input.p_category,
         amount_cents: input.p_amount_cents, expense_date: input.p_expense_date, activity_id: input.p_activity_id ?? null,
         notes: input.p_notes?.trim() || null, version: (previous?.version ?? 0) + 1, created_at: previous?.created_at ?? now(), updated_at: now() };
-      expenses.set(record.id, record); trip.updated_at = now(); respond(response, record); return;
+      expenses.set(record.id, record); trips.get(record.trip_id).updated_at = now(); respond(response, record); return;
     }
     if (rpc === 'delete_expense') {
       const record = expenses.get(input.p_id);
+      if(!record||!tripRole(user.id,record.trip_id)) { deny(response); return; }
       if (!record || record.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
-      expenses.delete(input.p_id); trip.updated_at = now(); respond(response, null); return;
+      expenses.delete(input.p_id); trips.get(record.trip_id).updated_at = now(); respond(response, null); return;
     }
     if (rpc === 'update_trip') {
-      if (input.p_id !== tripId) { deny(response); return; }
-      if (trip.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
+      const target=trips.get(input.p_id);
+      if (!target||!tripRole(user.id,input.p_id)) { deny(response); return; }
+      if (target.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
       const next = { name: input.p_name, destination: input.p_destination?.trim() || null,
         start_date: input.p_start_date, end_date: input.p_end_date, timezone: input.p_timezone,
-        person_one: input.p_person_one, person_two: input.p_person_two, version: trip.version + 1, updated_at: now() };
+        person_one: input.p_person_one, person_two: input.p_person_two, version: target.version + 1, updated_at: now() };
       if (input.p_touch_budget) {
         if (input.p_initial_budget_cents != null && !(Number.isInteger(input.p_initial_budget_cents) && input.p_initial_budget_cents >= 0)) { deny(response, 'INVALID_INITIAL_BUDGET', '22023', 400); return; }
         next.initial_budget_cents = input.p_initial_budget_cents ?? null;
       }
-      Object.assign(trip, next);
-      respond(response, { ...trip }); return;
+      Object.assign(target, next);
+      respond(response, { ...target }); return;
     }
-    if (rpc === 'list_trip_invites' && membership.role === 'owner') { respond(response, invitations); return; }
-    if (rpc === 'create_trip_invite' && membership.role === 'owner') {
+    if (['list_trip_invites','list_collection_invites','create_trip_invite','create_collection_invite','revoke_trip_invite','revoke_collection_invite'].includes(rpc)) {
+      const scope=rpc.includes('collection')?'collection':'trip';
+      const existing=invitations.find(item=>item.id===input.p_invite_id&&item.scope===scope);
+      const target=existing?.target??(scope==='trip'?input.p_trip_id:input.p_collection_id);
+      const role=scope==='trip'?tripRole(user.id,target):collectionRole(user.id,target);
+      if(role!=='owner') { deny(response); return; }
+      if(rpc.startsWith('list_')) { respond(response,invitations.filter(item=>item.scope===scope&&item.target===target).map(safeInvite)); return; }
+      if(rpc.startsWith('revoke_')) { if(!existing) deny(response); else { existing.revoked_at=now(); respond(response,null); } return; }
       const invite = { id: randomUUID(), role: input.p_role ?? 'member', expires_at: new Date(Date.now() + 86400000).toISOString(),
-        max_uses: input.p_max_uses ?? 1, use_count: 0, revoked_at: null, created_at: now(), last_used_at: null };
-      invitations.push(invite); respond(response, [{ ...invite, invite_id: invite.id, token: 'TEST_ONLY_INVITE' }]); return;
+        max_uses: input.p_max_uses ?? 1, use_count: 0, revoked_at: null, created_at: now(), last_used_at: null,
+        scope,target,token:randomUUID().replaceAll('-','')+randomUUID().replaceAll('-',''),users:new Set() };
+      invitations.push(invite); respond(response, [{ ...safeInvite(invite), invite_id: invite.id, token: invite.token }]); return;
     }
     deny(response);
   } catch { deny(response, 'FIXTURE_ERROR', 'XX000', 500); }
@@ -335,23 +414,28 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE
     ? { executablePath: process.env.BROWSER_EXECUTABLE } : { channel: 'chrome' }) });
   const owner = await context({ viewport: { width: 1366, height: 900 }, timezoneId: 'America/Sao_Paulo' });
-  await owner.page.goto(appOrigin);
-  await visibleText(owner.page, 'Viagem compartilhada');
+  await owner.page.goto(`${appOrigin}/#colecao=${ownerToken}`);
+  await visibleText(owner.page, 'Minhas viagens');
+  await owner.page.locator('.trip-card').filter({ hasText: 'Nossa Viagem' }).getByRole('button', { name: 'Abrir viagem', exact: true }).click();
+  await visibleText(owner.page, 'Viagem privada');
   await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).waitFor({ state: 'visible' });
   await owner.page.waitForFunction(() => !document.querySelector('.header-actions button')?.disabled);
   assert.equal(new URL(owner.page.url()).hash, '');
   assert.equal(activities.size, 0);
-  assert.equal(memberships.size, 1);
-  assert.equal(rpcCalls.includes('redeem_trip_invite'), false);
-  passed('O endereço comum abre a viagem automaticamente, sem convite nem liberação.');
+  assert.equal(collectionMemberships.size, 1);
+  assert.equal(memberships.size, 0);
+  assert.equal(rpcCalls.includes('redeem_collection_invite'), true);
+  assert.equal(rpcCalls.includes('open_shared_trip'), false);
+  passed('O convite explícito da coleção abre Minhas viagens e preserva a viagem existente sem conceder acesso público.');
   await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).click();
-  const sharing = owner.page.getByRole('dialog', { name: 'Leve a viagem com vocês' });
-  await owner.page.waitForFunction(expected => document.querySelector('[role="dialog"] input[readonly]')?.value === expected, `${appOrigin}/`);
-  assert.equal(await sharing.getByLabel('Link da viagem').inputValue(), `${appOrigin}/`);
-  assert.equal(await sharing.getByRole('button', { name: /Gerar|Autorizar|Revogar/ }).count(), 0);
-  await owner.page.screenshot({ path: resolve(root, 'artifacts/acesso-livre-link.png'), fullPage: true });
+  const sharing = owner.page.getByRole('dialog', { name: 'Nossos planos em outro aparelho' });
+  await sharing.getByRole('button', { name: 'Gerar convite privado', exact: true }).click();
+  await sharing.getByLabel('Convite desta viagem').waitFor();
+  const tripInviteUrl = await sharing.getByLabel('Convite desta viagem').inputValue();
+  assert.match(tripInviteUrl,/\/#convite=[0-9a-f]{64}$/);
+  assert.equal((await owner.page.evaluate(()=>JSON.stringify(localStorage))).includes(new URL(tripInviteUrl).hash.slice('#convite='.length)),false,'invitation tokens are never cached');
   await sharing.getByRole('button', { name: 'Fechar formulário' }).click();
-  passed('Compartilhar mostra somente o endereço estável da viagem, sem token ou prazo de validade.');
+  passed('Compartilhar gera convite restrito à viagem, com escopos visíveis e sem guardar o token no cache.');
 
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
   await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', osm: true });
@@ -407,7 +491,7 @@ try {
   passed('Edição atualiza centavos/horário; duplicação exige revisão; filtro por dia e modos de visualização funcionam.');
 
   const member = await context({ viewport: { width: 360, height: 800 }, timezoneId: 'Asia/Tokyo', isMobile: true });
-  await member.page.goto(appOrigin);
+  await member.page.goto(`${appOrigin}/#convite=${memberToken}`);
   await member.page.getByRole('button', { name: 'Editar Teste passeio revisado', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
   await visibleText(member.page, '10/04/2030 10:30');
   assert.equal(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -443,7 +527,7 @@ try {
   await deletion.waitFor({ state: 'hidden' });
   assert.equal(activities.size, 2);
   assert.ok(![...activities.values()].some((activity) => activity.name === 'Teste passeio duplicado'));
-  await navigate(owner.page, 'Nossa viagem');
+  await navigate(owner.page, 'Detalhes');
   await owner.page.getByLabel(/Nome da viagem/).fill('Viagem de teste');
   assert.equal(await owner.page.getByLabel('Destino', { exact: true }).inputValue(), '');
   assert.equal(await owner.page.getByLabel(/Orçamento inicial da viagem/).inputValue(), '', 'an unset budget is empty, not zero');
@@ -655,24 +739,242 @@ try {
   assert.equal(expenses.size, 4, 'offline consultation never adds local drafts to confirmed expenses');
   passed('Offline, os gastos da última sincronização continuam consultáveis no celular e gravações exigem conexão.');
 
-  const visitor = await context({ viewport: { width: 1280, height: 800 } });
-  await visitor.page.goto(`${appOrigin}/#convite=obsolete-link`);
-  await visitor.page.getByRole('button', { name: 'Editar Teste conflito resolvido', exact: true }).waitFor();
-  assert.equal(new URL(visitor.page.url()).hash, '');
-  assert.equal(activities.size, 2);
-  assert.equal(new Set([...memberships.values()].map(record => record.trip_id)).size, 1);
-  assert.equal(rpcCalls.includes('redeem_trip_invite'), false);
-  await (await button(visitor.page, 'Editar Teste conflito resolvido')).click();
-  const visitorEdit = visitor.page.getByRole('dialog', { name: 'Editar atividade' });
-  await visitorEdit.getByLabel(/Nome da atividade/).fill('Teste acesso livre');
-  await visitorEdit.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
-  await visitorEdit.waitFor({ state: 'hidden' });
-  await refresh(owner.page);
-  await visibleText(owner.page, 'Teste acesso livre');
-  passed('Um terceiro aparelho entra e edita a mesma viagem sem convite; links antigos também abrem automaticamente.');
+  await member.context.setOffline(false);
+  await refresh(member.page);
+  await navigate(owner.page, 'Trocar viagem');
+  await visibleText(owner.page, 'Minhas viagens');
+  const existingCard=owner.page.locator('.trip-card').filter({ hasText:'Viagem de teste' });
+  await visibleText(owner.page,'Orçamento inicial');
+  assert.ok((await existingCard.textContent()).includes('905,00'));
+  await navigate(owner.page, 'Nova viagem');
+  await owner.page.getByRole('heading',{ name:'Nova viagem',exact:true }).waitFor();
+  assert.equal(await owner.page.getByLabel(/Nome da viagem/).inputValue(),'');
+  assert.equal(await owner.page.getByLabel('Destino',{exact:true}).inputValue(),'');
+  assert.equal(await owner.page.getByLabel(/Orçamento inicial da viagem/).inputValue(),'');
+  await owner.page.getByLabel(/Nome da viagem/).fill('Segunda aventura');
+  await owner.page.getByLabel('Destino',{exact:true}).fill('Destino B');
+  await owner.page.getByLabel('Data de início',{exact:true}).fill('2035-08-10');
+  await owner.page.getByLabel('Data de término',{exact:true}).fill('2035-08-12');
+  await navigate(owner.page,'Criar viagem');
+  assert.equal(await owner.page.getByLabel(/Orçamento inicial da viagem/).evaluate(input=>input.validity.valueMissing),true);
+  assert.equal(trips.size,1,'a blank initial budget does not create a zero-budget trip');
+  await owner.page.getByLabel(/Orçamento inicial da viagem/).fill('0');
+  const createsBefore=rpcCalls.filter(call=>call==='create_private_trip').length;
+  await owner.page.getByRole('button',{ name:'Criar viagem',exact:true }).dblclick();
+  await visibleText(owner.page,'Segunda aventura');
+  await owner.page.getByRole('heading',{ name:'Segunda aventura',exact:true }).waitFor();
+  const tripB=[...trips.values()].find(value=>value.name==='Segunda aventura');
+  assert.ok(tripB);
+  assert.equal(tripB.collection_id,collectionId);
+  assert.equal(tripB.initial_budget_cents,0);
+  assert.equal(trips.size,2);
+  assert.equal(rpcCalls.filter(call=>call==='create_private_trip').length,createsBefore+1);
+  assert.equal(activities.size,2);
+  assert.equal(expenses.size,4);
+  assert.equal(trip.initial_budget_cents,200000);
+  assert.equal(await owner.page.getByRole('button',{ name:'Editar Teste conflito resolvido',exact:true }).count(),0);
+  await navigate(owner.page,'Gastos');
+  await expectTotal(owner.page,'expenses-total','0,00');
+  await newExpense(owner.page,{ description:'Gasto só da segunda viagem',amount:'5',category:'Outros',date:'2025-01-01' });
+  await expectTotal(owner.page,'expenses-total','5,00');
+  await navigate(owner.page,'Cronograma');
+  await newActivity(owner.page,{ name:'Momento só da segunda viagem',date:'2035-08-10T09:30',budget:'10' });
+  await navigate(owner.page,'Resumo');
+  await expectTotal(owner.page,'summary-expenses-total','5,00');
+  assert.equal(await owner.page.getByText('Teste Airbnb',{exact:true}).count(),0);
+  passed('Nova viagem exige orçamento, aceita zero, evita duplo cadastro e começa com cronograma e gastos vazios; cada saldo permanece separado.');
+
+  await navigate(owner.page,'Trocar viagem');
+  await owner.page.getByLabel('Pesquisar por nome ou destino',{exact:true}).fill('Destino B');
+  await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
+  await owner.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
+  await owner.page.getByLabel('Pesquisar por nome ou destino',{exact:true}).fill('');
+  await navigate(owner.page,'Próximas');
+  await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
+  assert.equal(await owner.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).count(),0);
+  const bCard=owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'});
+  await bCard.getByLabel('Ações de Segunda aventura').click();
+  await bCard.getByRole('button',{name:'Arquivar',exact:true}).click();
+  const archive=owner.page.getByRole('dialog',{name:'Guardar esta viagem no arquivo?'});
+  assert.equal(tripB.archived_at,null,'archiving waits for a concrete confirmation');
+  await archive.getByRole('button',{name:'Arquivar viagem',exact:true}).click();
+  await archive.waitFor({state:'hidden'});
+  assert.ok(tripB.archived_at);
+  assert.equal(await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
+  await navigate(owner.page,'Arquivadas');
+  const archivedCard=owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'});
+  await archivedCard.waitFor();
+  await archivedCard.getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(owner.page,'Momento só da segunda viagem');
+  await navigate(owner.page,'Gastos');
+  await expectTotal(owner.page,'expenses-total','5,00');
+  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'Arquivadas');
+  const restoreCard=owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'});
+  await restoreCard.getByLabel('Ações de Segunda aventura').click();
+  await restoreCard.getByRole('button',{name:'Desarquivar',exact:true}).click();
+  const restore=owner.page.getByRole('dialog',{name:'Trazer esta viagem de volta?'});
+  await restore.getByRole('button',{name:'Desarquivar viagem',exact:true}).click();
+  await restore.waitFor({state:'hidden'});
+  assert.equal(tripB.archived_at,null);
+  assert.equal(tripB.start_date,'2035-08-10');
+  assert.equal(tripB.initial_budget_cents,0);
+  assert.equal([...activities.values()].filter(value=>value.trip_id===tripB.id).length,1);
+  assert.equal([...expenses.values()].filter(value=>value.trip_id===tripB.id).length,1);
+  await navigate(owner.page,'Todas');
+  await owner.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await navigate(owner.page,'Gastos');
+  await expectTotal(owner.page,'expenses-total','905,00');
+  assert.equal(await owner.page.getByText('Gasto só da segunda viagem',{exact:true}).count(),0);
+  passed('Pesquisa e filtro por período funcionam; arquivar/desarquivar preserva atividades, gastos, datas e orçamento sem afetar a viagem anterior.');
+
+  const tripOnly=await context({viewport:{width:1280,height:800}});
+  await tripOnly.page.goto(tripInviteUrl);
+  await visibleText(tripOnly.page,'Teste conflito resolvido');
+  await navigate(tripOnly.page,'Trocar viagem');
+  await tripOnly.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
+  assert.equal(await tripOnly.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
+  await tripOnly.page.goto(`${appOrigin}/viagens/${tripB.id}/cronograma`);
+  await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  assert.equal(await tripOnly.page.getByText('Momento só da segunda viagem',{exact:true}).count(),0);
+  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'Convidar aparelho');
+  const collectionSharing=owner.page.getByRole('dialog',{name:'Nossos planos em outro aparelho'});
+  assert.equal(await collectionSharing.getByRole('button',{name:'Gerar convite privado',exact:true}).isDisabled(),true);
+  await collectionSharing.getByRole('checkbox').check();
+  await collectionSharing.getByRole('button',{name:'Gerar convite privado',exact:true}).click();
+  await collectionSharing.getByLabel('Convite da coleção').waitFor();
+  const collectionInviteUrl=await collectionSharing.getByLabel('Convite da coleção').inputValue();
+  assert.match(collectionInviteUrl,/\/#colecao=[0-9a-f]{64}$/);
+  await collectionSharing.getByRole('button',{name:'Fechar formulário'}).click();
+  const collectionDevice=await context({viewport:{width:360,height:780}});
+  await collectionDevice.page.goto(collectionInviteUrl);
+  await collectionDevice.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  await collectionDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===2);
+  assert.equal(await collectionDevice.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await collectionDevice.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(collectionDevice.page,'Momento só da segunda viagem');
+  assert.equal(new URL(owner.page.url()).pathname,'/viagens','another device never forces a trip selection here');
+  const visitor=await context({viewport:{width:1280,height:800}});
+  await visitor.page.goto(`${appOrigin}/viagens/${tripB.id}/cronograma`);
+  await visitor.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  await visibleText(visitor.page,'Qual será o próximo destino?');
+  assert.equal(await visitor.page.locator('.trip-card').count(),0);
+  assert.equal(rpcCalls.includes('open_shared_trip'),false);
+  passed('Convites restritos abrem só uma viagem; acesso à coleção exige autorização explícita; conhecer a URL não revela dados e a seleção é local ao aparelho.');
+
+  await navigate(owner.page,'Nova viagem');
+  await owner.page.getByLabel(/Nome da viagem/).fill('Memória da terceira viagem');
+  await owner.page.getByLabel(/Orçamento inicial da viagem/).fill('100');
+  await owner.page.getByLabel('Data de início',{exact:true}).fill('2020-01-01');
+  await owner.page.getByLabel('Data de término',{exact:true}).fill('2020-01-02');
+  await navigate(owner.page,'Criar viagem');
+  await visibleText(owner.page,'Esta viagem faz parte das nossas memórias. Você pode consultar e corrigir seus registros.');
+  const tripC=[...trips.values()].find(value=>value.name==='Memória da terceira viagem');
+  await navigate(owner.page,'Gastos');
+  await newExpense(owner.page,{description:'Gasto esquecido da viagem passada',amount:'7',category:'Hospedagem',date:'2021-01-01'});
+  await expectTotal(owner.page,'expenses-total','7,00');
+  await navigate(owner.page,'Detalhes');
+  await owner.page.getByLabel('Data de início',{exact:true}).fill('2036-01-01');
+  await owner.page.getByLabel('Data de término',{exact:true}).fill('2036-01-02');
+  await navigate(owner.page,'Salvar nossa viagem');
+  await visibleText(owner.page,'Sua viagem foi atualizada.');
+  assert.equal([...expenses.values()].filter(value=>value.trip_id===tripC.id).length,1);
+  await navigate(owner.page,'Trocar viagem');
+  await navigate(collectionDevice.page,'Trocar viagem');
+  await collectionDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
+  await tripOnly.page.goto(`${appOrigin}/viagens/${tripC.id}/cronograma`);
+  await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  await tripOnly.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
+  assert.equal(await tripOnly.page.locator('.trip-card').count(),1);
+  passed('A coleção autoriza viagens futuras; viagens passadas aceitam gastos esquecidos e datas corrigidas sem mover lançamentos.');
+
+  await owner.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(owner.page,'Teste conflito resolvido');
+  delayedReads.set(tripId,1600);
+  await owner.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await owner.page.waitForTimeout(150);
+  await navigate(owner.page,'Trocar viagem');
+  await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(owner.page,'Momento só da segunda viagem');
+  await owner.page.waitForTimeout(1800);
+  assert.equal(await owner.page.getByText('Teste conflito resolvido',{exact:true}).count(),0);
+  assert.equal(new URL(owner.page.url()).pathname,`/viagens/${tripB.id}/cronograma`);
+  delayedReads.delete(tripId);
+  await navigate(owner.page,'Detalhes');
+  await owner.page.getByLabel(/Nome da viagem/).fill('Rascunho que fica na segunda viagem');
+  owner.page.removeAllListeners('dialog');
+  owner.page.once('dialog',dialog=>dialog.dismiss());
+  await navigate(owner.page,'Trocar viagem');
+  assert.equal(await owner.page.getByLabel(/Nome da viagem/).inputValue(),'Rascunho que fica na segunda viagem');
+  assert.equal(tripB.name,'Segunda aventura');
+  owner.page.on('dialog',dialog=>dialog.accept());
+  await navigate(owner.page,'Trocar viagem');
+  await owner.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  assert.equal(tripB.name,'Segunda aventura');
+  assert.equal(trip.name,'Viagem de teste');
+  passed('Respostas da viagem anterior são ignoradas; a troca confirma o descarte de rascunhos e nunca salva dados em outra viagem.');
+
+  await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(owner.page,'Momento só da segunda viagem');
+  await navigate(owner.page,'Editar Momento só da segunda viagem');
+  const pendingActivity=owner.page.getByRole('dialog',{name:'Editar atividade'});
+  await pendingActivity.getByLabel(/Orçamento \(R\$\)/).fill('12');
+  delayedRpcs.set('save_activity',2000);
+  await pendingActivity.getByRole('button',{name:'Salvar atividade',exact:true}).click();
+  const saveAlert=owner.page.waitForEvent('dialog');
+  await owner.page.evaluate(()=>history.back());
+  assert.match((await saveAlert).message(),/Aguarde a confirmação do salvamento/);
+  assert.equal(await pendingActivity.getByLabel(/Nome da atividade/).inputValue(),'Momento só da segunda viagem');
+  assert.equal(await pendingActivity.getByLabel(/Orçamento \(R\$\)/).isDisabled(),true);
+  await pendingActivity.waitFor({state:'hidden'});
+  delayedRpcs.delete('save_activity');
+  assert.equal(new URL(owner.page.url()).pathname,`/viagens/${tripB.id}/cronograma`);
+  assert.equal([...activities.values()].find(value=>value.trip_id===tripB.id).budget_cents,1200);
+  assert.equal(activities.get(first.id).budget_cents,1725);
+  await navigate(owner.page,'Gastos');
+  await navigate(owner.page,'Editar Gasto só da segunda viagem');
+  const pendingExpense=owner.page.getByRole('dialog',{name:'Editar gasto'});
+  await pendingExpense.getByLabel(/^Valor \(R\$\)/).fill('6');
+  delayedRpcs.set('save_expense',2000);
+  await pendingExpense.getByRole('button',{name:'Salvar gasto',exact:true}).click();
+  const expenseAlert=owner.page.waitForEvent('dialog');
+  await owner.page.evaluate(()=>history.back());
+  assert.match((await expenseAlert).message(),/Aguarde a confirmação do salvamento/);
+  assert.equal(await pendingExpense.getByLabel(/^Descrição/).inputValue(),'Gasto só da segunda viagem');
+  await pendingExpense.waitFor({state:'hidden'});
+  delayedRpcs.delete('save_expense');
+  assert.equal(new URL(owner.page.url()).pathname,`/viagens/${tripB.id}/gastos`);
+  assert.equal([...expenses.values()].find(value=>value.trip_id===tripB.id).amount_cents,600);
+  assert.equal(expenses.get(fuel.id).amount_cents,21000);
+  passed('Navegar Voltar durante gravações de atividade ou gasto aguarda a confirmação, mantém o formulário correto e não inicia outro rascunho.');
+
+  await collectionDevice.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
+  await visibleText(collectionDevice.page,'Momento só da segunda viagem');
+  const sharedSession=await collectionDevice.page.evaluate(()=>{
+    const key=Object.keys(localStorage).find(key=>key.startsWith('sb-')&&key.endsWith('-auth-token'));
+    return JSON.parse(localStorage.getItem(key)).user.id;
+  });
+  collectionMemberships.delete(memberKey(sharedSession,collectionId));
+  await refresh(collectionDevice.page);
+  await collectionDevice.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  await collectionDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===0);
+  const stalePrivate=await collectionDevice.page.evaluate(()=>JSON.stringify(localStorage));
+  assert.equal(stalePrivate.includes('Momento só da segunda viagem'),false);
+  await member.context.setOffline(true);
+  await navigate(member.page,'Trocar viagem');
+  await visibleText(member.page,'Consulta offline neste aparelho');
+  await visibleText(member.page,/Somente as viagens sincronizadas neste aparelho estão disponíveis/);
+  assert.equal(await member.page.locator('.trip-card').count(),1);
+  assert.equal(await member.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
+  passed('A revogação interrompe o acesso e limpa a cópia privada; a lista offline indica o histórico parcial disponível neste aparelho.');
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
 } catch (error) {
-  console.error(error instanceof Error ? error.message : 'Falha no teste de navegador.');
+  console.error(error instanceof Error ? error.stack : 'Falha no teste de navegador.');
+  for(const current of browser?.contexts()??[]) for(const page of current.pages()) {
+    console.error(`Tela de teste: ${page.url().replace(/#[^#]*/, '')}`);
+    console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-4000).replace(/[0-9a-f]{64}/g,'[convite omitido]'));
+  }
   process.exitCode = 1;
 } finally {
   await cleanup();

@@ -1,2 +1,2 @@
-import TravelApp from '@/components/TravelApp';
-export default function Page() { return <TravelApp />; }
+import AppRouter from '@/components/AppRouter';
+export default function Page() { return <AppRouter />; }

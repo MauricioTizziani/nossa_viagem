@@ -165,12 +165,12 @@ export function isOutsideTripPeriod(instant: string, trip: Pick<Trip, "timezone"
 
 export function tripStatus(trip: Pick<Trip, "timezone" | "start_date" | "end_date">, now: Date = new Date()): { phase: "unplanned" | "upcoming" | "ongoing" | "finished"; days: number | null; message: string } {
   const today = dateKey(now, trip.timezone);
-  if (!trip.start_date) return { phase: "unplanned", days: null, message: "Nossa próxima aventura" };
+  if (!trip.start_date || !trip.end_date) return { phase: "unplanned", days: null, message: "Datas a definir" };
   if (today < trip.start_date) {
     const days = Math.round((Date.parse(`${trip.start_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
     return { phase: "upcoming", days, message: days === 1 ? "Falta 1 dia para nossa aventura" : `Faltam ${days} dias para nossa aventura` };
   }
-  if (trip.end_date && today > trip.end_date) return { phase: "finished", days: null, message: "Pequenos planos, grandes memórias" };
+  if (today > trip.end_date) return { phase: "finished", days: null, message: "Memórias de viagens passadas" };
   return { phase: "ongoing", days: null, message: "Nossa aventura está acontecendo" };
 }
 
