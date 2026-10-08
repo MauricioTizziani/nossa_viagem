@@ -4,6 +4,8 @@ Aplicativo para planejar uma viagem a dois, com acesso aberto pelo endereço do 
 
 O cronograma preserva os cinco campos: **Data e hora**, **Orçamento (R$)**, **Nome da atividade**, **Lugar** e **Tipo**. As categorias são exatamente Refeição, Lazer e Atividade. O orçamento é planejamento, em centavos inteiros; `null` significa “A definir” e zero significa R$ 0,00. Os valores são totais por atividade, sem multiplicação ou divisão entre as pessoas.
 
+A aba **Gastos** registra o que foi efetivamente pago, de forma independente do cronograma. Orçamento (plano) e gasto (pago) nunca se misturam: o total gasto soma apenas os registros da aba Gastos. Veja [Gastos da viagem](#gastos-da-viagem).
+
 Não há tela de login. Uma sessão anônima identifica cada navegador e abre automaticamente a mesma viagem para todos que acessarem o aplicativo. Instalações novas começam vazias, sem nomes, destino, período ou atividades fictícias; atualizações preservam os planos existentes.
 
 ## Executar no computador
@@ -31,12 +33,14 @@ As variáveis `NEXT_PUBLIC_` entram no código do navegador. Os arquivos `.env.l
 
 1. Crie um projeto dedicado e copie sua URL e sua chave **publishable** para `.env.local`.
 2. Em Authentication, habilite **Anonymous Sign-Ins**. Mantenha a criação de usuários permitida para este fluxo. Não é necessário configurar e-mail, senha ou provedores sociais.
-3. No SQL Editor, execute as migrações 001, 002 e 003, nessa ordem. Se você já executou as duas primeiras, execute somente `supabase/migrations/202610080003_acesso_livre.sql`. Ela ativa o acesso automático, preservando os planos existentes. Depois, atualize/reinicie o aplicativo.
+3. No SQL Editor, execute as migrações 001, 002, 003 e 004, nessa ordem. Se as três primeiras já foram executadas, execute somente `supabase/migrations/202610080004_gastos.sql`: ela cria a tabela `trip_expenses` da aba Gastos preservando viagem, atividades e acesso existentes, e pode ser executada novamente sem duplicar estruturas. Se uma execução anterior recusou categorias com acento, execute esse mesmo arquivo outra vez: ele corrige a regra e os registros afetados, sem apagar gastos. Depois, atualize/reinicie o aplicativo.
 4. Deixe `public` exposto pela Data API. **Não exponha `private`**: ele contém apenas funções auxiliares e recibos de resgate. As tabelas de acesso não recebem permissões de escrita para navegadores.
-5. Confira em Database → Publications que `trips` integra `supabase_realtime`. Não adicione `trip_invites`, `trip_members` ou `activities` à publicação por conta própria. Todas as alterações do cronograma atualizam `trips.updated_at` para sinalizar a viagem e fazer uma nova leitura protegida por RLS.
+5. Confira em Database → Publications que `trips` integra `supabase_realtime`. Não adicione `trip_invites`, `trip_members`, `activities` ou `trip_expenses` à publicação por conta própria. Todas as alterações do cronograma e dos gastos atualizam `trips.updated_at` para sinalizar a viagem e fazer uma nova leitura protegida por RLS.
 6. Em Auth, configure Site URL com o endereço da aplicação. Use um domínio HTTPS quando publicar.
 
-Alternativamente, use a CLI oficial em um projeto já inicializado: `supabase link --project-ref SEU_PROJECT_REF` e `supabase db push`. A migração é para um banco novo; não execute o mesmo arquivo novamente no SQL Editor sobre tabelas já criadas.
+Alternativamente, use a CLI oficial em um projeto já inicializado: `supabase link --project-ref SEU_PROJECT_REF` e `supabase db push`. A migração inicial é para um banco novo; não execute os arquivos 001 e 002 novamente no SQL Editor sobre tabelas já criadas. As migrações 003 e 004 são incrementais e toleram repetição.
+
+Nenhuma variável de ambiente nova é necessária para a aba Gastos. Enquanto a migração 004 não for aplicada, o cronograma continua funcionando e a aba Gastos exibe um aviso indicando o arquivo pendente, sem gravar nada.
 
 O aplicativo cria uma sessão anônima automaticamente e chama `open_shared_trip()`. Essa função associa qualquer visitante à mesma viagem compartilhada. Não há convite, senha, aprovação de aparelho ou limite de duas pessoas. Qualquer pessoa que obtenha o endereço do aplicativo poderá consultar, adicionar, editar e excluir seus planos. RLS e validações continuam limitando as operações à viagem compartilhada e verificando versões e valores. Consulte [Anonymous Sign-Ins](https://supabase.com/docs/guides/auth/auth-anonymous) e [funções de banco](https://supabase.com/docs/guides/database/functions).
 
@@ -68,11 +72,29 @@ Execute a migração `202610080002_openstreetmap.sql` depois da inicial. Ela acr
 
 O serviço público Nominatim não é usado: [sua política proíbe autocomplete no cliente](https://operations.osmfoundation.org/policies/nominatim/). As páginas `/termos` e `/privacidade` descrevem o novo funcionamento. Revise os textos e identifique responsável/contato antes de publicar.
 
+## Gastos da viagem
+
+A navegação passa a ter quatro abas: **Cronograma**, **Gastos**, **Resumo** e **Nossa viagem**. Um gasto é uma despesa realmente paga e pode existir sem nenhuma atividade no cronograma. Cada gasto tem **Descrição**, **Categoria** (Combustível, Hospedagem, Alimentação, Transporte, Passeios e lazer, Compras ou Outros), **Valor (R$)**, **Data do gasto**, **Atividade relacionada** (opcional) e **Observações** (opcional). As categorias de gasto são independentes dos tipos Refeição, Lazer e Atividade do cronograma, que não mudaram.
+
+Regras de valor e data:
+
+- O valor é o total pago pelo casal, em centavos inteiros, sempre maior que zero; não há multiplicação por pessoa, divisão de despesas, acerto de contas, contas a pagar ou parcelas.
+- A data é uma data de calendário (`YYYY-MM-DD`), exibida como DD/MM/AAAA. O formulário sugere o dia atual no fuso da viagem; a data escolhida é gravada exatamente, sem deslocamento por fuso do aparelho. Gastos antes ou depois do período da viagem são aceitos, por exemplo uma hospedagem paga antecipadamente.
+- O total gasto soma cada registro uma única vez e ignora completamente os orçamentos do cronograma. Não existe orçamento global novo nem indicador de “saldo” ou “estouro” entre orçamento e gastos.
+
+A lista vem ordenada da data mais recente para a mais antiga e mostra, por padrão, todos os gastos. Os filtros combinam pesquisa por descrição, categoria e período inclusivo (a data final não pode ser anterior à inicial) e podem ser limpos com **Limpar filtros**. Com filtros ativos, o cartão **Total gasto na viagem** continua inteiro e um **Subtotal dos filtros** indica quantos registros correspondem; o total por categoria avisa quando considera apenas os resultados filtrados. Se um gasto salvo ficar fora dos filtros atuais, a interface avisa. No computador os gastos aparecem em tabela (Data, Descrição, Categoria, Valor e ações) e no celular em cartões, sem rolagem horizontal. Edição e exclusão com confirmação atualizam os totais; fechar o formulário com alterações pede confirmação.
+
+Vincular um gasto a uma atividade é opcional e nunca altera totais, orçamentos ou os cinco campos do cronograma. A atividade precisa pertencer à mesma viagem (validado no banco), pode receber vários gastos e o vínculo pode ser removido. No cronograma, cada atividade mostra como informação complementar o total dos gastos vinculados e a diferença em relação ao orçamento, apresentada como comparação até agora; sem orçamento (“A definir”) não há diferença, e sem vínculos aparece “Nenhum gasto registrado”. Excluir uma atividade preserva os gastos, apenas removendo o vínculo (a confirmação avisa quantos existem); excluir um gasto não afeta a atividade.
+
+O **Resumo** mantém os indicadores do cronograma, agora identificados como **Orçamento previsto no cronograma**, e acrescenta a seção **Gastos da viagem**, com o total registrado, a distribuição por categoria e um atalho para a aba Gastos.
+
+No banco, a tabela `public.trip_expenses` guarda `trip_id`, `description`, `category`, `amount_cents`, `expense_date`, `activity_id`, `notes`, `version`, `created_at` e `updated_at`, com restrições de valor positivo, categorias permitidas, tamanho dos textos, chave estrangeira para a atividade (`on delete set null`) e índices por viagem/data, viagem/categoria e atividade. Um gatilho impede mover um gasto para outra viagem e exige que a atividade vinculada pertença à mesma viagem. RLS permite leitura somente a quem já abriu a viagem; as gravações passam pelas funções `save_expense` e `delete_expense`, sem políticas públicas, sem chaves secretas no navegador e sem novo fluxo de autenticação.
+
 ## Sincronização e conflitos
 
-As gravações usam funções SQL autenticadas. Inclusões recebem um UUID estável antes de salvar e uma repetição idêntica não insere outra atividade. Edições e exclusões exigem a versão vista ao abrir o formulário; alterações concorrentes produzem `VERSION_CONFLICT` em vez de sobrescrever dados.
+As gravações usam funções SQL autenticadas. Inclusões recebem um UUID estável antes de salvar e uma repetição idêntica não insere outra atividade nem outro gasto. Edições e exclusões exigem a versão vista ao abrir o formulário; alterações concorrentes produzem `VERSION_CONFLICT` em vez de sobrescrever dados, e o formulário oferece **Carregar versão atual**. O botão Salvar fica desabilitado enquanto a gravação está em andamento.
 
-Uma alteração de atividade atualiza `trips.updated_at`, sem alterar a versão das configurações da viagem. O Realtime publica apenas atualizações da viagem, protegidas por RLS; os aparelhos associados refazem a leitura do cronograma. Isso também sincroniza exclusões e evita as limitações de filtragem/RLS dos eventos DELETE do Postgres Changes. O cliente recarrega os dados ao voltar ao aplicativo e ao recuperar conexão. Veja [Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes).
+Uma alteração de atividade ou de gasto atualiza `trips.updated_at`, sem alterar a versão das configurações da viagem. O Realtime publica apenas atualizações da viagem, protegidas por RLS; os aparelhos associados refazem a leitura do cronograma e dos gastos. Isso também sincroniza exclusões e evita as limitações de filtragem/RLS dos eventos DELETE do Postgres Changes. O cliente recarrega os dados ao voltar ao aplicativo e ao recuperar conexão. Veja [Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes).
 
 As funções de gravação têm `search_path` vazio, referências de schema explícitas e validação de dados e versões. `open_shared_trip()` permite a entrada automática de qualquer visitante na viagem compartilhada; não aceita o ID de uma viagem diferente. Não há escrita direta nas tabelas pelo navegador.
 
@@ -87,9 +109,9 @@ npm start
 
 No Android/Chrome, use **Instalar aplicativo** ou **Adicionar à tela inicial** no menu do navegador. No iPhone/Safari, use **Compartilhar → Adicionar à Tela de Início**. No computador, use o ícone/menu de instalação quando o navegador oferecer. Disponibilidade e texto do menu variam por navegador.
 
-Abra online e sincronize a viagem pelo menos uma vez em cada aparelho antes de depender da consulta offline. O aplicativo mantém somente uma cópia necessária do cronograma, separada pelo ID da viagem e da sessão. Essa cópia pertence ao navegador sincronizado, não a um cache compartilhado. A interface informa a falta de conexão e a última sincronização.
+Abra online e sincronize a viagem pelo menos uma vez em cada aparelho antes de depender da consulta offline. O aplicativo mantém somente uma cópia necessária do cronograma e dos gastos, separada pelo ID da viagem e da sessão. Essa cópia pertence ao navegador sincronizado, não a um cache compartilhado. A interface informa a falta de conexão e a última sincronização.
 
-Sem internet, os dados já sincronizados podem ser consultados; novas gravações exigem conexão. Um formulário aberto continua preservado na memória se a conexão cair, mas não é apresentado como alteração sincronizada. Fechar/recarregar a página pode descartar esse rascunho; a interface pede confirmação quando houver alterações. Novas versões oferecem atualização sem recarregar automaticamente um formulário em andamento.
+Sem internet, os dados já sincronizados podem ser consultados, incluindo os gastos e seus totais; novas gravações exigem conexão e nenhum rascunho local entra nos totais. Um formulário aberto continua preservado na memória se a conexão cair, mas não é apresentado como alteração sincronizada. Fechar/recarregar a página pode descartar esse rascunho; a interface pede confirmação quando houver alterações. Novas versões oferecem atualização sem recarregar automaticamente um formulário em andamento.
 
 O service worker guarda apenas o shell e arquivos estáticos próprios. Não guarda respostas privadas, sessões, convites nem pesquisas externas. Os lugares OpenStreetMap selecionados fazem parte da cópia local do cronograma. A autenticação persistente fica no armazenamento administrado pelo SDK Supabase. Navegadores podem apagar dados locais por pressão de armazenamento; ao perder essa sessão, basta abrir o site com conexão novamente.
 
@@ -101,7 +123,7 @@ Cada `npm run build` gera automaticamente uma versão do service worker a partir
 2. Publique o projeto em uma hospedagem com suporte a Next.js, como Vercel, ou execute `npm start` em um servidor Node atrás de HTTPS. Esta aplicação não usa exportação HTML estática.
 3. Configure **somente** as variáveis públicas de `.env.example` na hospedagem. Chaves administrativas permanecem no computador proprietário.
 4. Ajuste `NEXT_PUBLIC_APP_URL` e Site URL do Supabase para o domínio final. Recompile após mudar valores públicos. Photon não exige configuração de chave nem de faturamento.
-5. Aplique a migração 003 no Supabase e abra o endereço da aplicação; a entrada será automática em qualquer aparelho.
+5. Aplique as migrações 003 e 004 no Supabase e abra o endereço da aplicação; a entrada será automática em qualquer aparelho.
 6. Valide aparelhos novos entrando automaticamente, consulta offline e a instalação da PWA no domínio HTTPS.
 
 Mantenha respostas e páginas privadas fora de cache compartilhado/CDN. A aplicação consulta os dados do usuário no navegador com sua sessão, e configura cabeçalhos sem cache para navegação privada. Não adicione analytics ou logs que capturem tokens, corpos de convites ou registros privados.
@@ -117,9 +139,9 @@ npm run build
 
 Para verificar a interface com um Chrome já instalado, execute `npm run dev` e, em outro terminal, `npm run test:ui`. Esse teste aceita `BASE_URL` e `BROWSER_EXECUTABLE` e recusa modificar uma viagem conectada. Capturas de computador e celular de 360 px ficam em `artifacts/`.
 
-`npm run test:app` cria um servidor de teste local, uma compilação isolada em `.next-test` e identidades de navegador independentes. Os registros fictícios existem exclusivamente em memória nessa fixture. Isso valida a integração da interface com o contrato HTTP do Supabase, sem conectar à sua viagem ou comprovar o Realtime remoto.
+`npm run test:app` cria um servidor de teste local, uma compilação isolada em `.next-test` e identidades de navegador independentes. Os registros fictícios existem exclusivamente em memória nessa fixture, inclusive os gastos de exemplo (gasolina R$ 200,00, Airbnb R$ 600,00 e almoço R$ 80,00 somando R$ 880,00); nada é inserido na viagem real. Isso valida a integração da interface com o contrato HTTP do Supabase, sem conectar à sua viagem ou comprovar o Realtime remoto.
 
-`test:db` executa a migração real em PostgreSQL local via PGlite com `pgcrypto`; não cria projeto remoto e não usa segredos reais. A fixture reproduz papéis e claims do Supabase Auth para testar o banco. Os 25 testes do banco verificam RLS, permissões, convites fortes/hash/validade/revogação/uso/repetição, bloqueio entre viagens, primeiro dono controlado, recuperação, edição concorrente, exclusão, centavos, zero/ausência, fuso, validações de lugares e publicação limitada a `trips`. Outros cinco testes executam o script de provisionamento contra um servidor local de teste, verificando chaves atuais/legadas, recuperação da viagem existente, ausência de tokens/segredos nos logs, recusa de sobrescrita e HTTPS.
+`test:db` executa as migrações reais em PostgreSQL local via PGlite com `pgcrypto`; não cria projeto remoto e não usa segredos reais. A fixture reproduz papéis e claims do Supabase Auth para testar o banco. Os 41 testes do banco verificam RLS, permissões, convites fortes/hash/validade/revogação/uso/repetição, bloqueio entre viagens, primeiro dono controlado, recuperação, edição concorrente, exclusão, centavos, zero/ausência, fuso, validações de lugares, publicação limitada a `trips` e, para os gastos: migração 004 repetível, totais sem orçamentos, data de calendário em fusos distintos, gravação idempotente e conflitos de versão, vínculo restrito à mesma viagem, restrições de valor/categoria/texto, exclusão de atividade preservando gastos e bloqueio de visitantes não autorizados. Outros cinco testes executam o script de provisionamento contra um servidor local de teste, verificando chaves atuais/legadas, recuperação da viagem existente, ausência de tokens/segredos nos logs, recusa de sobrescrita e HTTPS.
 
 Testes locais não substituem um projeto Supabase configurado e a verificação do provedor de pesquisa. Antes de usar a viagem real, valide:
 
@@ -132,15 +154,17 @@ Testes locais não substituem um projeto Supabase configurado e a verificação 
 - Aparelhos novos abrindo e editando a mesma viagem sem convite; reabrir após limpar dados do navegador.
 - Edição simultânea da mesma atividade em dois aparelhos exibindo conflito.
 - Consulta offline após sincronização, sem permitir gravação ou pesquisa de lugares offline.
-- Layout a 360 px, navegação inferior, teclado móvel, nomes longos e instalação/atualização da PWA.
+- Layout a 360 px, navegação inferior com quatro abas, teclado móvel, nomes longos e instalação/atualização da PWA.
+- Gastos: cadastro, edição e exclusão confirmada atualizando total, contagem e total por categoria; valor vazio, zero ou negativo recusado; data preservada entre fusos.
+- Gastos: filtros combinados com subtotal, vínculo opcional com atividade sem alterar totais, exclusão de atividade vinculada preservando o gasto e seção **Gastos da viagem** no Resumo.
 
 Os testes de gravação usam banco e sessões isolados. A disponibilidade da pesquisa Photon foi conferida com uma consulta pública real; sincronização e autorização no Supabase de produção ainda exigem configuração e verificação pelo proprietário.
 
 ## Organização
 
 - `app/`: rota principal, layout e manifesto.
-- `components/`: cronograma, formulário, lugares, resumo, configurações, compartilhamento e PWA.
-- `lib/`: modelos, regras, validações, acesso Supabase e consulta offline.
+- `components/`: cronograma, formulário, lugares, gastos (`Expenses.tsx`, `ExpenseForm.tsx`), resumo, configurações, compartilhamento e PWA.
+- `lib/`: modelos, regras, validações (incluindo `expenses.ts`), acesso Supabase e consulta offline.
 - `public/`: marca, ícones e service worker.
 - `supabase/migrations/`: estrutura, validações, permissões, RLS, RPCs e sincronização.
 - `supabase/tests/`: testes reais do banco local.
@@ -152,6 +176,12 @@ Os testes de gravação usam banco e sessões isolados. A disponibilidade da pes
 **“Sessão anônima indisponível”**: habilite Anonymous Sign-Ins; confira chave pública, URL, limites de novas sessões e se CAPTCHA foi ativado sem integração.
 
 **Atualização de acesso livre pendente**: aplique `202610080003_acesso_livre.sql` no SQL Editor, depois das migrações 001 e 002. Recompile/reinicie o aplicativo. Não reaplique as duas migrações anteriores.
+
+**“Falta aplicar a atualização de gastos no Supabase”**: aplique `202610080004_gastos.sql` no SQL Editor, depois da migração 003, e recarregue o aplicativo. O cronograma não é afetado enquanto isso; a aba Gastos só grava após a migração. Se o aviso continuar logo após aplicar, aguarde alguns segundos para o PostgREST recarregar o schema ou reinicie a Data API no painel.
+
+**“A categoria não foi aceita pelo banco”**: a migração 004 foi aplicada com a codificação errada e gravou “Combustível” e “Alimentação” de forma inválida. Execute `202610080004_gastos.sql` novamente no SQL Editor e salve o gasto outra vez. Os gastos já registrados são preservados.
+
+**“A atividade escolhida não está mais disponível nesta viagem”**: a atividade foi excluída ou pertence a outra viagem. Atualize os dados e escolha novamente ou salve o gasto sem vínculo.
 
 **Pesquisa de lugares indisponível**: confira a conexão e aguarde para tentar novamente; o servidor Photon público pode estar fora do ar ou limitar consultas. Use o modo manual. Se configurar `NEXT_PUBLIC_PHOTON_URL`, use uma instância HTTPS compatível que permita chamadas do navegador (CORS).
 

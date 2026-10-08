@@ -66,6 +66,52 @@ export interface ActivitySummary extends SummaryValues {
   byType: Record<ActivityType, SummaryValues>;
 }
 
+/** Expense categories belong to the expense control and never replace schedule types. */
+export const EXPENSE_CATEGORIES = ["Combustível", "Hospedagem", "Alimentação", "Transporte", "Passeios e lazer", "Compras", "Outros"] as const;
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+export interface ExpenseInput {
+  description: string;
+  category: ExpenseCategory;
+  /** Total paid for the trip, in integer centavos; always greater than zero. */
+  amount_cents: number;
+  /** Calendar date YYYY-MM-DD; never converted through a timezone. */
+  expense_date: string;
+  activity_id: string | null;
+  notes: string | null;
+}
+
+export interface Expense extends ExpenseInput {
+  id: string;
+  trip_id: string;
+  version: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ExpenseFilters {
+  search?: string;
+  category?: ExpenseCategory | "";
+  from?: string;
+  to?: string;
+}
+
+export interface ExpenseTotals {
+  totalCents: number;
+  count: number;
+}
+
+export interface ExpenseSummary extends ExpenseTotals {
+  byCategory: Record<ExpenseCategory, ExpenseTotals>;
+}
+
+/** Comparison between a planned budget and the expenses linked so far; never a final closing. */
+export interface ActivityExpenseComparison extends ExpenseTotals {
+  budgetCents: number | null;
+  /** Expenses minus budget. Null while the budget is still "A definir". */
+  differenceCents: number | null;
+}
+
 export const EMPTY_PLACE: PlaceValue = {
   place_id: null,
   manual_place_name: null,

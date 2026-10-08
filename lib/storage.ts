@@ -1,5 +1,5 @@
-import type { Trip, Activity } from './types';
-export type Snapshot = { trip: Trip; activities: Activity[]; syncedAt: string; userId: string; role: 'owner' | 'member' };
+import type { Trip, Activity, Expense } from './types';
+export type Snapshot = { trip: Trip; activities: Activity[]; expenses: Expense[]; syncedAt: string; userId: string; role: 'owner' | 'member' };
 const project = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'unconfigured';
 const prefix = `nossa-viagem:v1:${project}:`;
 function snapshotKey(userId: string, tripId: string) { return `${prefix}${userId}:${tripId}`; }
@@ -18,9 +18,11 @@ export function readSnapshot(userId: string): Snapshot | null {
     if (!tripId) return null;
     const raw = localStorage.getItem(snapshotKey(userId, tripId));
     if (!raw) return null;
-    const snapshot = JSON.parse(raw) as Snapshot;
-    if (snapshot.userId !== userId || snapshot.trip.id !== tripId || !Array.isArray(snapshot.activities)) return null;
-    return snapshot;
+    const snapshot = JSON.parse(raw) as Partial<Snapshot> & { expenses?: unknown };
+    if (snapshot.userId !== userId || snapshot.trip?.id !== tripId || !Array.isArray(snapshot.activities)) return null;
+    // Snapshots saved before the expense control carry no expenses; they stay readable offline.
+    if (snapshot.expenses !== undefined && !Array.isArray(snapshot.expenses)) return null;
+    return { ...snapshot, expenses: (snapshot.expenses ?? []) as Expense[] } as Snapshot;
   } catch { return null; }
 }
 export function clearSnapshot(userId: string) {

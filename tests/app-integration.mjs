@@ -24,6 +24,7 @@ const trip = { id: tripId, name: 'Nossa Viagem', destination: null, start_date: 
 const users = new Map();
 const memberships = new Map();
 const activities = new Map();
+const expenses = new Map();
 const invitations = [];
 const rpcCalls = [];
 let buildProcess;
@@ -92,6 +93,11 @@ const fixture = createServer(async (request, response) => {
         const id = url.searchParams.get('id')?.replace(/^eq\./, '');
         if (id) records = records.filter((record) => record.id === id);
       }
+      else if (url.pathname === '/rest/v1/trip_expenses') {
+        records = membership ? [...expenses.values()].sort((a, b) => b.expense_date.localeCompare(a.expense_date) || b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)) : [];
+        const id = url.searchParams.get('id')?.replace(/^eq\./, '');
+        if (id) records = records.filter((record) => record.id === id);
+      }
       if (records) {
         if (singular && records.length !== 1) deny(response, 'Record not found', 'PGRST116', 406);
         else respond(response, singular ? records[0] : records);
@@ -131,7 +137,28 @@ const fixture = createServer(async (request, response) => {
     if (rpc === 'delete_activity') {
       const record = activities.get(input.p_id);
       if (!record || record.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
-      activities.delete(input.p_id); trip.updated_at = now(); respond(response, null); return;
+      activities.delete(input.p_id);
+      // Mirrors the database foreign key: linked expenses are preserved and only unlinked.
+      for (const expense of expenses.values()) if (expense.activity_id === input.p_id) expense.activity_id = null;
+      trip.updated_at = now(); respond(response, null); return;
+    }
+    if (rpc === 'save_expense') {
+      if (input.p_trip_id !== tripId) { deny(response); return; }
+      const previous = expenses.get(input.p_id);
+      if ((previous && previous.version !== input.p_expected_version) || (!previous && input.p_expected_version !== 0)) {
+        deny(response, 'VERSION_CONFLICT', '40001', 409); return;
+      }
+      if (input.p_activity_id && activities.get(input.p_activity_id)?.trip_id !== tripId) { deny(response, 'EXPENSE_ACTIVITY_MISMATCH', '23503', 409); return; }
+      if (!(Number.isInteger(input.p_amount_cents) && input.p_amount_cents > 0) || !input.p_description?.trim()) { deny(response, 'new row violates check constraint', '23514', 400); return; }
+      const record = { id: input.p_id, trip_id: tripId, description: input.p_description.trim(), category: input.p_category,
+        amount_cents: input.p_amount_cents, expense_date: input.p_expense_date, activity_id: input.p_activity_id ?? null,
+        notes: input.p_notes?.trim() || null, version: (previous?.version ?? 0) + 1, created_at: previous?.created_at ?? now(), updated_at: now() };
+      expenses.set(record.id, record); trip.updated_at = now(); respond(response, record); return;
+    }
+    if (rpc === 'delete_expense') {
+      const record = expenses.get(input.p_id);
+      if (!record || record.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
+      expenses.delete(input.p_id); trip.updated_at = now(); respond(response, null); return;
     }
     if (rpc === 'update_trip') {
       if (input.p_id !== tripId) { deny(response); return; }
@@ -242,6 +269,22 @@ async function newActivity(page, { name, date = '2030-04-10T09:30', budget = '',
   await dialog.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
   await dialog.waitFor({ state: 'hidden', timeout: 15000 });
   await visibleText(page, name);
+}
+async function expectTotal(page, testId, amount) {
+  await page.getByTestId(testId).filter({ hasText: new RegExp(`R\\$\\s${amount.replace('.', '\\.')}`) }).waitFor({ state: 'visible', timeout: 15000 });
+}
+// Example amounts exist only in this in-memory fixture; no real trip receives them.
+async function newExpense(page, { description, amount, category, date, notes = '', expectVisible = true }) {
+  await (await button(page, 'Adicionar gasto')).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Um novo gasto' });
+  await dialog.getByLabel(/^Descrição/).fill(description);
+  await dialog.getByLabel(/^Categoria/).selectOption(category);
+  await dialog.getByLabel(/^Valor \(R\$\)/).fill(amount);
+  await dialog.getByLabel(/^Data do gasto/).fill(date);
+  if (notes) await dialog.getByLabel(/^Observações/).fill(notes);
+  await dialog.getByRole('button', { name: 'Salvar gasto', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden', timeout: 15000 });
+  if (expectVisible) await visibleText(page, description);
 }
 async function context(options = {}) {
   const context = await browser.newContext(options);
@@ -407,6 +450,151 @@ try {
   await visibleText(member.page, 'Viagem de teste');
   passed('Exclusão pede confirmação e configurações salvam destino NULL recebido do banco.');
 
+  await navigate(owner.page, 'Gastos');
+  await visibleText(owner.page, 'Ainda não registramos nenhum gasto.');
+  await expectTotal(owner.page, 'expenses-total', '0,00');
+  await newExpense(owner.page, { description: 'Teste gasolina', amount: '200,00', category: 'Combustível', date: '2030-04-09' });
+  await newExpense(owner.page, { description: 'Teste Airbnb', amount: '600', category: 'Hospedagem', date: '2030-03-01', notes: 'Pago antecipadamente' });
+  await newExpense(owner.page, { description: 'Teste almoço de domingo', amount: '80,00', category: 'Alimentação', date: '2030-04-10' });
+  assert.equal(expenses.size, 3);
+  assert.equal(activities.size, 2, 'registering expenses never creates schedule activities');
+  const fuel = [...expenses.values()].find((expense) => expense.description === 'Teste gasolina');
+  const lunch = [...expenses.values()].find((expense) => expense.description === 'Teste almoço de domingo');
+  assert.equal(fuel.amount_cents, 20000);
+  assert.equal(fuel.expense_date, '2030-04-09', 'the calendar date is stored exactly as chosen');
+  assert.equal([...expenses.values()].find((expense) => expense.description === 'Teste Airbnb').amount_cents, 60000);
+  assert.equal(lunch.activity_id, null);
+  await expectTotal(owner.page, 'expenses-total', '880,00');
+  assert.deepEqual(await owner.page.locator('table tbody tr td:first-child').allTextContents(), ['10/04/2030', '09/04/2030', '01/03/2030'], 'most recent expense first, prepaid lodging included');
+  await (await button(owner.page, 'Ver detalhes de Teste Airbnb')).click();
+  await visibleText(owner.page, 'Pago antecipadamente');
+  await mkdir(resolve(root, 'artifacts'), { recursive: true });
+  await owner.page.screenshot({ path: resolve(root, 'artifacts/gastos-desktop.png'), fullPage: true });
+  passed('Gastos: combustível, hospedagem antecipada e almoço somam R$ 880,00 sem criar atividades, em ordem decrescente de data.');
+
+  await navigate(owner.page, 'Cronograma');
+  await newActivity(owner.page, { name: 'Teste piquenique', date: '2030-04-10T13:00', type: 'Refeição' });
+  assert.equal(activities.size, 3);
+  const picnic = [...activities.values()].find((activity) => activity.name === 'Teste piquenique');
+  assert.equal(picnic.budget_cents, null);
+  await navigate(owner.page, 'Gastos');
+  await (await button(owner.page, 'Editar Teste almoço de domingo')).click();
+  let expenseEdit = owner.page.getByRole('dialog', { name: 'Editar gasto' });
+  await expenseEdit.getByLabel('Pesquisar atividade do cronograma').fill('piquenique');
+  assert.equal(await expenseEdit.getByLabel('Atividade relacionada', { exact: true }).locator('option').count(), 2, 'search narrows the activity list');
+  await expenseEdit.getByLabel('Atividade relacionada', { exact: true }).selectOption(picnic.id);
+  await expenseEdit.getByRole('button', { name: 'Salvar gasto', exact: true }).click();
+  await expenseEdit.waitFor({ state: 'hidden' });
+  assert.equal(expenses.get(lunch.id).activity_id, picnic.id);
+  assert.equal(expenses.get(lunch.id).version, 2);
+  assert.equal(activities.get(picnic.id).budget_cents, null, 'linking never changes the activity budget');
+  assert.equal(expenses.size, 3, 'linking never creates another expense');
+  await expectTotal(owner.page, 'expenses-total', '880,00');
+  await visibleText(owner.page, 'Teste piquenique');
+  await navigate(owner.page, 'Cronograma');
+  await visibleText(owner.page, /1 gasto vinculado: R\$\s80,00 · orçamento a definir/);
+  await visibleText(owner.page, 'Nenhum gasto registrado');
+  passed('Vincular o almoço mantém R$ 880,00, preserva o orçamento da atividade e aparece como detalhe no cronograma.');
+
+  await navigate(owner.page, 'Gastos');
+  await owner.page.getByLabel('Filtrar por categoria').selectOption('Alimentação');
+  await expectTotal(owner.page, 'expenses-subtotal', '80,00');
+  await visibleText(owner.page, '1 de 3 registros correspondem aos filtros');
+  await visibleText(owner.page, 'Considerando apenas os resultados filtrados');
+  assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste gasolina', exact: true }).count(), 0);
+  await expectTotal(owner.page, 'expenses-total', '880,00');
+  await newExpense(owner.page, { description: 'Teste pedágio', amount: '12,30', category: 'Transporte', date: '2030-04-09', expectVisible: false });
+  await visibleText(owner.page, /foi salvo, mas não aparece na lista porque está fora dos filtros atuais/);
+  await expectTotal(owner.page, 'expenses-total', '892,30');
+  await (await button(owner.page, 'Limpar filtros')).first().click();
+  await visibleText(owner.page, 'Teste pedágio');
+  await owner.page.getByLabel('Pesquisar gasto por descrição').fill('airbnb');
+  await owner.page.getByLabel('Data inicial').fill('2030-01-01');
+  await owner.page.getByLabel('Data final').fill('2030-03-01');
+  await expectTotal(owner.page, 'expenses-subtotal', '600,00');
+  await owner.page.getByLabel('Data final').fill('2030-02-28');
+  await visibleText(owner.page, 'Nenhum gasto encontrado');
+  await owner.page.getByLabel('Data final').fill('2029-12-31');
+  await visibleText(owner.page, 'A data final do filtro não pode ser anterior à data inicial.');
+  await (await button(owner.page, 'Limpar filtros')).first().click();
+  assert.equal(await owner.page.getByTestId('expenses-subtotal').count(), 0);
+  passed('Filtros combinados: subtotal e contagem, aviso de gasto salvo fora dos filtros, período inclusivo e validação.');
+
+  await (await button(owner.page, 'Editar Teste pedágio')).click();
+  expenseEdit = owner.page.getByRole('dialog', { name: 'Editar gasto' });
+  await expenseEdit.getByLabel(/^Valor \(R\$\)/).fill('10,00');
+  await expenseEdit.getByRole('button', { name: 'Salvar gasto', exact: true }).click();
+  await expenseEdit.waitFor({ state: 'hidden' });
+  await expectTotal(owner.page, 'expenses-total', '890,00');
+  await (await button(owner.page, 'Excluir Teste pedágio')).click();
+  const expenseDeletion = owner.page.getByRole('dialog', { name: 'Excluir este gasto?' });
+  await expenseDeletion.getByRole('button', { name: 'Excluir gasto', exact: true }).click();
+  await expenseDeletion.waitFor({ state: 'hidden' });
+  assert.equal(expenses.size, 3);
+  await expectTotal(owner.page, 'expenses-total', '880,00');
+  const savesBefore = rpcCalls.filter((call) => call === 'save_expense').length;
+  await (await button(owner.page, 'Adicionar gasto')).first().click();
+  const doubleDialog = owner.page.getByRole('dialog', { name: 'Um novo gasto' });
+  await doubleDialog.getByLabel(/^Descrição/).fill('Teste estacionamento');
+  await doubleDialog.getByLabel(/^Categoria/).selectOption('Transporte');
+  await doubleDialog.getByLabel(/^Valor \(R\$\)/).fill('15');
+  await doubleDialog.getByLabel(/^Data do gasto/).fill('2030-04-10');
+  await doubleDialog.getByRole('button', { name: 'Salvar gasto', exact: true }).dblclick();
+  await doubleDialog.waitFor({ state: 'hidden' });
+  assert.equal(rpcCalls.filter((call) => call === 'save_expense').length, savesBefore + 1, 'repeated clicks produce a single save');
+  assert.equal(expenses.size, 4);
+  await expectTotal(owner.page, 'expenses-total', '895,00');
+  passed('Editar e excluir atualizam os indicadores; cliques repetidos em Salvar geram uma única gravação.');
+
+  await refresh(member.page);
+  await navigate(member.page, 'Gastos');
+  await member.page.getByRole('button', { name: 'Editar Teste gasolina', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+  assert.equal(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal scrolling at 360px');
+  assert.equal(await member.page.locator('table').first().isVisible(), false, 'the phone shows cards instead of a squeezed table');
+  await expectTotal(member.page, 'expenses-total', '895,00');
+  await member.page.screenshot({ path: resolve(root, 'artifacts/gastos-mobile.png'), fullPage: true });
+  await (await button(owner.page, 'Editar Teste gasolina')).click();
+  expenseEdit = owner.page.getByRole('dialog', { name: 'Editar gasto' });
+  await expenseEdit.getByLabel(/^Valor \(R\$\)/).fill('205,00');
+  await (await button(member.page, 'Editar Teste gasolina')).click();
+  const mobileExpenseEdit = member.page.getByRole('dialog', { name: 'Editar gasto' });
+  await mobileExpenseEdit.getByLabel(/^Valor \(R\$\)/).fill('210,00');
+  await mobileExpenseEdit.getByRole('button', { name: 'Salvar gasto', exact: true }).click();
+  await mobileExpenseEdit.waitFor({ state: 'hidden' });
+  await refresh(owner.page);
+  await expenseEdit.getByRole('button', { name: 'Salvar gasto', exact: true }).click();
+  await visibleText(owner.page, /Esta informação mudou em outro aparelho/);
+  assert.equal(expenses.get(fuel.id).amount_cents, 21000, 'the concurrent edit is never overwritten');
+  await expenseEdit.getByRole('button', { name: 'Carregar versão atual', exact: true }).click();
+  expenseEdit = owner.page.getByRole('dialog', { name: 'Editar gasto' });
+  await owner.page.waitForFunction(() => document.querySelector('[role="dialog"] input[inputmode="decimal"]')?.value === '210,00');
+  await expenseEdit.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  await expenseEdit.waitFor({ state: 'hidden' });
+  await expectTotal(owner.page, 'expenses-total', '905,00');
+  passed('Dois aparelhos sincronizam gastos; edição simultânea exibe conflito e carrega a versão atual; celular usa cartões.');
+
+  await navigate(owner.page, 'Cronograma');
+  await (await button(owner.page, 'Excluir Teste piquenique')).click();
+  const activityDeletion = owner.page.getByRole('dialog', { name: 'Excluir este momento?' });
+  await visibleText(owner.page, /Há 1 gasto vinculado a esta atividade/);
+  await activityDeletion.getByRole('button', { name: 'Excluir atividade', exact: true }).click();
+  await activityDeletion.waitFor({ state: 'hidden' });
+  assert.equal(activities.size, 2);
+  assert.equal(expenses.size, 4, 'deleting an activity never deletes expenses');
+  assert.equal(expenses.get(lunch.id).activity_id, null, 'only the link is removed');
+  await navigate(owner.page, 'Gastos');
+  await expectTotal(owner.page, 'expenses-total', '905,00');
+  await (await button(owner.page, 'Ver detalhes de Teste almoço de domingo')).click();
+  await visibleText(owner.page, 'Sem atividade vinculada');
+  await navigate(owner.page, 'Resumo');
+  await expectTotal(owner.page, 'summary-expenses-total', '905,00');
+  await visibleText(owner.page, 'Orçamento previsto no cronograma');
+  await (await button(owner.page, 'Ver gastos')).click();
+  await visibleText(owner.page, 'Nossos gastos');
+  await navigate(owner.page, 'Cronograma');
+  passed('Excluir uma atividade vinculada preserva o gasto; o Resumo separa gastos registrados do orçamento previsto.');
+
+  await navigate(member.page, 'Cronograma');
   await (await button(member.page, 'Editar Teste conflito resolvido')).click();
   mobileEdit = member.page.getByRole('dialog', { name: 'Editar atividade' });
   await mobileEdit.getByLabel(/Orçamento \(R\$\)/).fill('19,00');
@@ -444,6 +632,18 @@ try {
   await visibleText(member.page, /Última sincronização:/);
   await visibleText(member.page, 'Mapas disponíveis com conexão');
   passed('Queda de conexão preserva formulário sem gravação; SW recarrega cronograma autorizado com sessão sintética expirada.');
+
+  await navigate(member.page, 'Gastos');
+  await visibleText(member.page, 'Teste Airbnb');
+  await expectTotal(member.page, 'expenses-total', '905,00');
+  await member.page.locator('.mobile-add').click();
+  const offlineExpense = member.page.getByRole('dialog', { name: 'Um novo gasto' });
+  await visibleText(member.page, 'Você está offline. Seu formulário continua aqui; conecte-se para salvar.');
+  assert.equal(await offlineExpense.getByRole('button', { name: 'Salvar gasto', exact: true }).isDisabled(), true);
+  await offlineExpense.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  await offlineExpense.waitFor({ state: 'hidden' });
+  assert.equal(expenses.size, 4, 'offline consultation never adds local drafts to confirmed expenses');
+  passed('Offline, os gastos da última sincronização continuam consultáveis no celular e gravações exigem conexão.');
 
   const visitor = await context({ viewport: { width: 1280, height: 800 } });
   await visitor.page.goto(`${appOrigin}/#convite=obsolete-link`);

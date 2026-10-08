@@ -16,6 +16,13 @@ const stranger = '10000000-0000-4000-8000-000000000003';
 const anotherDevice = '10000000-0000-4000-8000-000000000004';
 const activityId = '20000000-0000-4000-8000-000000000001';
 const otherActivityId = '20000000-0000-4000-8000-000000000002';
+const outsider = '10000000-0000-4000-8000-000000000007';
+const secretActivityId = '30000000-0000-4000-8000-000000000001';
+const dinnerId = '20000000-0000-4000-8000-000000000030';
+const fuelId = '40000000-0000-4000-8000-000000000001';
+const lodgingId = '40000000-0000-4000-8000-000000000002';
+const lunchId = '40000000-0000-4000-8000-000000000003';
+const tollId = '40000000-0000-4000-8000-000000000004';
 let tripId;
 let otherTripId;
 let ownerToken;
@@ -34,6 +41,15 @@ async function save({ id = activityId, trip = tripId, version = 0, starts = '202
   osmId = null, osmName = null, osmAddress = null, lat = null, lon = null } = {}) {
   return row('select * from public.save_activity($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)',
     [trip, id, version, starts, budget, name, type, place, manualName, manualAddress, manualUrl, osmId, osmName, osmAddress, lat, lon]);
+}
+// Example values used only inside this local database; nothing reaches a real trip.
+async function spend({ id = fuelId, trip = tripId, version = 0, description = 'Gasolina — viagem de ida', category = 'Combustível',
+  amount = 20000, date = '2026-10-09', activity = null, notes = null } = {}) {
+  return row('select * from public.save_expense($1,$2,$3,$4,$5,$6,$7,$8,$9)', [trip, id, version, description, category, amount, date, activity, notes]);
+}
+async function expenseTotal(trip = tripId) {
+  const totals = await row('select coalesce(sum(amount_cents),0)::bigint as total, count(*)::int as n from public.trip_expenses where trip_id=$1', [trip]);
+  return { total: Number(totals.total), count: totals.n };
 }
 async function newInvite({ role = 'member', uses = 1, hours = 24 } = {}) {
   await as('authenticated', owner);
@@ -417,6 +433,167 @@ test('open mode disables invite RPCs and keeps internal config, other trips and 
   assert.equal((await row("select relrowsecurity from pg_class where oid='private.shared_trip'::regclass")).relrowsecurity, true);
 });
 
+test('expense migration applies after 003, re-runs safely, preserves data and protects the new table with RLS', async () => {
+  await as('postgres');
+  const beforeTrips = (await row('select count(*)::int as n from public.trips')).n;
+  const beforeActivities = (await row('select count(*)::int as n from public.activities')).n;
+  const migration = await readFile(new URL('../migrations/202610080004_gastos.sql', import.meta.url), 'utf8');
+  await db.exec(migration);
+  await db.exec(migration);
+  assert.equal((await row('select count(*)::int as n from public.trips')).n, beforeTrips);
+  assert.equal((await row('select count(*)::int as n from public.activities')).n, beforeActivities);
+  const tables = await db.query("select relname, relrowsecurity from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname");
+  assert.deepEqual(tables.rows.map((item) => item.relname), ['activities', 'trip_expenses', 'trip_invites', 'trip_members', 'trips']);
+  assert.ok(tables.rows.every((item) => item.relrowsecurity));
+  assert.equal((await row("select count(*)::int as n from pg_policies where schemaname='public' and tablename='trip_expenses'")).n, 1);
+  assert.equal((await row("select count(*)::int as n from pg_policies where schemaname='public' and tablename='trip_expenses' and 'anon' = any(roles)")).n, 0);
+  assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows.map((item) => item.tablename), ['trips']);
+  // A Windows-1252 client stores the UTF-8 bytes of í (C3 AD) as two characters.
+  await db.exec('alter table public.trip_expenses drop constraint trip_expenses_category_check');
+  await db.exec(`alter table public.trip_expenses add constraint trip_expenses_category_check check (category in ('Combust' || chr(195) || chr(173) || 'vel', 'Hospedagem', 'Alimenta' || chr(195) || chr(167) || chr(195) || chr(163) || 'o', 'Transporte', 'Passeios e lazer', 'Compras', 'Outros'))`);
+  const brokenId = '40000000-0000-4000-8000-000000000099';
+  await db.query(`insert into public.trip_expenses(id, trip_id, description, category, amount_cents, expense_date) values ($1, $2, 'Gasolina', 'Combust' || chr(195) || chr(173) || 'vel', 60000, '2026-11-08')`, [brokenId, tripId]);
+  await db.exec(migration);
+  assert.equal((await row('select category from public.trip_expenses where id=$1', [brokenId])).category, 'Combustível');
+  await db.query('delete from public.trip_expenses where id=$1', [brokenId]);
+  await as('authenticated', member);
+  await assert.rejects(db.query("select public.save_expense($1,$2,0,'Gasolina','Combustivel',100,'2026-11-08',null,null)", [tripId, '40000000-0000-4000-8000-000000000098']), /trip_expenses_category_check/);
+  await as('postgres');
+  await db.exec(`insert into auth.users(id) values('${outsider}')`);
+});
+
+test('members register fuel, prepaid lodging and meals without schedule activities; totals ignore budgets', async () => {
+  await as('authenticated', member);
+  const activitiesBefore = (await row('select count(*)::int as n from public.activities where trip_id=$1', [tripId])).n;
+  const fuel = await spend({ description: '  Gasolina — viagem de ida  ', notes: '   ' });
+  assert.equal(fuel.description, 'Gasolina — viagem de ida');
+  assert.equal(fuel.notes, null);
+  assert.equal(fuel.version, 1);
+  assert.equal(fuel.activity_id, null);
+  const lodging = await spend({ id: lodgingId, description: 'Airbnb — hospedagem', category: 'Hospedagem', amount: 60000, date: '2026-09-20', notes: '  Hospedagem já paga antecipadamente  ' });
+  assert.equal(lodging.notes, 'Hospedagem já paga antecipadamente');
+  await spend({ id: lunchId, description: 'Almoço de domingo', category: 'Alimentação', amount: 8000, date: '2026-10-11' });
+  assert.deepEqual(await expenseTotal(), { total: 88000, count: 3 }, 'R$ 200,00 + R$ 600,00 + R$ 80,00 = R$ 880,00, including the prepaid lodging');
+  assert.equal((await row('select count(*)::int as n from public.activities where trip_id=$1', [tripId])).n, activitiesBefore, 'expenses never create activities');
+  const dinner = await save({ id: dinnerId, name: 'Jantar especial', type: 'Refeição', budget: 15000, starts: '2026-10-11T22:00:00Z' });
+  assert.equal(Number(dinner.budget_cents), 15000);
+  assert.deepEqual(await expenseTotal(), { total: 88000, count: 3 }, 'a planned budget never enters the expense total');
+  const byCategory = await db.query('select category, sum(amount_cents)::bigint as total from public.trip_expenses where trip_id=$1 group by category order by category', [tripId]);
+  assert.deepEqual(byCategory.rows.map((item) => [item.category, Number(item.total)]), [['Alimentação', 8000], ['Combustível', 20000], ['Hospedagem', 60000]]);
+});
+
+test('the expense date is stored as a calendar date, unchanged by the session timezone', async () => {
+  await as('authenticated', member);
+  for (const zone of ['Asia/Tokyo', 'Pacific/Honolulu', 'UTC']) {
+    await db.exec(`set timezone='${zone}'`);
+    if (zone === 'Asia/Tokyo') await spend({ id: tollId, description: 'Pedágio', category: 'Transporte', amount: 1230, date: '2026-10-05' });
+    assert.equal((await row("select to_char(expense_date,'YYYY-MM-DD') as day from public.trip_expenses where id=$1", [tollId])).day, '2026-10-05');
+  }
+  assert.deepEqual(await expenseTotal(), { total: 89230, count: 4 });
+});
+
+test('an expense retry with the same UUID/data never duplicates; different data and stale versions conflict', async () => {
+  await as('authenticated', member);
+  const replay = await spend();
+  assert.equal(replay.version, 1);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where id=$1', [fuelId])).n, 1);
+  await assert.rejects(spend({ amount: 20001 }), /VERSION_CONFLICT/);
+  await as('authenticated', owner);
+  const changed = await spend({ version: 1, amount: 21000, notes: 'Abastecimento antes de sair' });
+  assert.equal(changed.version, 2);
+  assert.equal(Number(changed.amount_cents), 21000);
+  await as('authenticated', member);
+  await assert.rejects(spend({ version: 1, amount: 22000 }), /VERSION_CONFLICT/);
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000099', version: 1 }), /VERSION_CONFLICT/);
+  assert.equal(Number((await row('select amount_cents from public.trip_expenses where id=$1', [fuelId])).amount_cents), 21000);
+  assert.deepEqual(await expenseTotal(), { total: 90230, count: 4 });
+});
+
+test('linking an expense to an activity keeps the total and requires an activity of the same trip, also at the database level', async () => {
+  await as('authenticated', member);
+  const before = await expenseTotal();
+  const linked = await spend({ id: lunchId, version: 1, description: 'Almoço de domingo', category: 'Alimentação', amount: 8000, date: '2026-10-11', activity: dinnerId });
+  assert.equal(linked.activity_id, dinnerId);
+  assert.equal(linked.version, 2);
+  assert.deepEqual(await expenseTotal(), before, 'linking creates no second expense');
+  const dinner = await row('select budget_cents, version from public.activities where id=$1', [dinnerId]);
+  assert.equal(Number(dinner.budget_cents), 15000, 'the activity budget is untouched');
+  assert.equal(dinner.version, 1);
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000005', activity: secretActivityId }), /EXPENSE_ACTIVITY_MISMATCH/);
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000005', activity: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }), /EXPENSE_ACTIVITY_MISMATCH/);
+  await fails('update public.trip_expenses set activity_id=$2 where id=$1', [lunchId, secretActivityId]);
+  await as('postgres');
+  await fails('update public.trip_expenses set activity_id=$2 where id=$1', [lunchId, secretActivityId], /EXPENSE_ACTIVITY_MISMATCH/);
+  await fails('update public.trip_expenses set trip_id=$2 where id=$1', [lunchId, otherTripId], /EXPENSE_TRIP_IMMUTABLE/);
+  assert.equal((await row('select activity_id from public.trip_expenses where id=$1', [lunchId])).activity_id, dinnerId);
+});
+
+test('database constraints reject blank descriptions, unknown categories, non-positive amounts and oversized text', async () => {
+  await as('authenticated', owner);
+  const id = '40000000-0000-4000-8000-000000000006';
+  for (const input of [{ description: '   ' }, { description: '\t\n' }, { description: '\u00a0\u2003' }, { description: 'x'.repeat(201) }, { category: 'Hotel' }, { category: 'Refeição' },
+    { amount: 0 }, { amount: -1 }, { amount: 1000000000000 }, { date: 'infinity' }, { notes: 'n'.repeat(2001) }]) {
+    await assert.rejects(spend({ id, ...input }), /check constraint|not-null constraint/);
+  }
+  await assert.rejects(spend({ id, amount: null }), /not-null constraint/);
+  await assert.rejects(spend({ id, date: null }), /not-null constraint/);
+  await assert.rejects(spend({ id, description: null }), /not-null constraint/);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where id=$1', [id])).n, 0);
+});
+
+test('deleting a linked activity preserves its expenses; deleting an expense never touches the activity', async () => {
+  await as('authenticated', member);
+  const before = await expenseTotal();
+  await row('select public.delete_activity($1,$2)', [dinnerId, 1]);
+  const lunch = await row('select activity_id, amount_cents, version from public.trip_expenses where id=$1', [lunchId]);
+  assert.equal(lunch.activity_id, null, 'only the link is removed');
+  assert.equal(Number(lunch.amount_cents), 8000);
+  assert.deepEqual(await expenseTotal(), before, 'the expense total is unchanged after deleting the activity');
+  const walk = await save({ id: '20000000-0000-4000-8000-000000000031', name: 'Passeio no parque', type: 'Lazer', budget: null });
+  const tickets = await spend({ id: '40000000-0000-4000-8000-000000000007', description: 'Ingressos do passeio', category: 'Passeios e lazer', amount: 5000, date: '2026-10-12', activity: walk.id });
+  await fails('select public.delete_expense($1,$2)', [tickets.id, 7], /VERSION_CONFLICT/);
+  await row('select public.delete_expense($1,$2)', [tickets.id, tickets.version]);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where id=$1', [tickets.id])).n, 0);
+  const activity = await row('select name, version, budget_cents from public.activities where id=$1', [walk.id]);
+  assert.equal(activity.name, 'Passeio no parque');
+  assert.equal(activity.version, 1);
+  assert.equal(activity.budget_cents, null, 'an absent budget is not turned into zero by expenses');
+  assert.deepEqual(await expenseTotal(), before);
+});
+
+test('outsiders and anonymous visitors cannot read or modify expenses, and expenses never cross trips', async () => {
+  await as('postgres');
+  await db.query("insert into public.trip_expenses(id,trip_id,description,category,amount_cents,expense_date) values('40000000-0000-4000-8000-000000000050',$1,'Secreto','Outros',100,'2026-10-01')", [otherTripId]);
+  await as('authenticated', outsider);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses')).n, 0);
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000051' }), /ACCESS_DENIED/);
+  await fails('select public.delete_expense($1,$2)', [fuelId, 2]);
+  await as('anon');
+  await fails('select * from public.trip_expenses');
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000051' }), /permission denied/);
+  await fails('select public.delete_expense($1,$2)', [fuelId, 2], /permission denied/);
+  await as('authenticated', member);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where trip_id=$1', [otherTripId])).n, 0);
+  await fails("insert into public.trip_expenses(id,trip_id,description,category,amount_cents,expense_date) values('40000000-0000-4000-8000-000000000052',$1,'Direto','Outros',100,'2026-10-01')", [tripId]);
+  await fails('delete from public.trip_expenses where id=$1', [fuelId]);
+  await assert.rejects(spend({ id: '40000000-0000-4000-8000-000000000053', trip: otherTripId }), /ACCESS_DENIED/);
+  await assert.rejects(spend({ id: fuelId, version: 2, trip: otherTripId, amount: 21000 }), /ACCESS_DENIED/, 'trip_id cannot be used to move an expense');
+  await fails('select public.delete_expense($1,$2)', ['40000000-0000-4000-8000-000000000050', 1]);
+  assert.equal((await row('select trip_id from public.trip_expenses where id=$1', [fuelId])).trip_id, tripId);
+  await as('postgres');
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where trip_id=$1', [otherTripId])).n, 1);
+});
+
+test('expense changes signal the trip for synchronization without changing trip settings versions', async () => {
+  await as('authenticated', member);
+  const before = await row('select version, updated_at from public.trips where id=$1', [tripId]);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await spend({ id: '40000000-0000-4000-8000-000000000008', description: 'Estacionamento do passeio', category: 'Transporte', amount: 1500, date: '2026-10-12' });
+  const after = await row('select version, updated_at from public.trips where id=$1', [tripId]);
+  assert.equal(after.version, before.version);
+  assert.ok(new Date(after.updated_at) > new Date(before.updated_at));
+});
+
 test('fresh open installation creates exactly one empty shared trip for all sessions', async () => {
   const fresh = new PGlite({ extensions: { pgcrypto } });
   try {
@@ -426,10 +603,12 @@ test('fresh open installation creates exactly one empty shared trip for all sess
       create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
       grant usage on schema public,auth,extensions to anon,authenticated,service_role;
       insert into auth.users(id) values('${owner}'),('${member}'); create publication supabase_realtime;`);
-    for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql','202610080003_acesso_livre.sql']) await fresh.exec(await readFile(new URL(`../migrations/${filename}`,import.meta.url),'utf8'));
+    for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql','202610080003_acesso_livre.sql','202610080004_gastos.sql']) await fresh.exec(await readFile(new URL(`../migrations/${filename}`,import.meta.url),'utf8'));
     const created = (await fresh.query('select * from public.trips')).rows;
     assert.equal(created.length, 1);
     assert.equal(created[0].destination, null);
+    assert.equal((await fresh.query('select count(*)::int as n from public.trip_expenses')).rows[0].n, 0, 'no fictitious expenses are seeded');
+    assert.equal((await fresh.query("select relrowsecurity from pg_class where oid='public.trip_expenses'::regclass")).rows[0].relrowsecurity, true);
     await fresh.exec('set role authenticated');
     for (const user of [owner,member]) {
       await fresh.query("select set_config('request.jwt.claim.sub',$1,false)", [user]);
