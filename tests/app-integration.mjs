@@ -22,6 +22,8 @@ const tripId = '60000000-0000-4000-8000-000000000001';
 const collectionId = '70000000-0000-4000-8000-000000000001';
 const ownerToken = 'a'.repeat(64);
 const memberToken = 'b'.repeat(64);
+const tripOnlyToken = 'c'.repeat(64);
+const collectionGuestToken = 'd'.repeat(64);
 const trip = { id: tripId, name: 'Nossa Viagem', destination: null, start_date: null, end_date: null,
   timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: collectionId,
   archived_at: null, version: 1, created_at: now(), updated_at: now() };
@@ -35,6 +37,8 @@ const expenses = new Map();
 const invitations = [
   { id: randomUUID(), scope: 'collection', target: collectionId, token: ownerToken, role: 'owner', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
   { id: randomUUID(), scope: 'trip', target: tripId, token: memberToken, role: 'member', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
+  { id: randomUUID(), scope: 'trip', target: tripId, token: tripOnlyToken, role: 'member', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
+  { id: randomUUID(), scope: 'collection', target: collectionId, token: collectionGuestToken, role: 'member', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
 ];
 const rpcCalls = [];
 const delayedReads = new Map();
@@ -417,9 +421,9 @@ try {
   await owner.page.goto(`${appOrigin}/#colecao=${ownerToken}`);
   await visibleText(owner.page, 'Minhas viagens');
   await owner.page.locator('.trip-card').filter({ hasText: 'Nossa Viagem' }).getByRole('button', { name: 'Abrir viagem', exact: true }).click();
-  await visibleText(owner.page, 'Viagem privada');
-  await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).waitFor({ state: 'visible' });
-  await owner.page.waitForFunction(() => !document.querySelector('.header-actions button')?.disabled);
+  await visibleText(owner.page, 'Nosso cronograma');
+  assert.equal(await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).count(), 0);
+  assert.equal(await owner.page.getByText('Viagem privada', { exact: true }).count(), 0);
   assert.equal(new URL(owner.page.url()).hash, '');
   assert.equal(activities.size, 0);
   assert.equal(collectionMemberships.size, 1);
@@ -427,15 +431,6 @@ try {
   assert.equal(rpcCalls.includes('redeem_collection_invite'), true);
   assert.equal(rpcCalls.includes('open_shared_trip'), false);
   passed('O convite explícito da coleção abre Minhas viagens e preserva a viagem existente sem conceder acesso público.');
-  await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).click();
-  const sharing = owner.page.getByRole('dialog', { name: 'Nossos planos em outro aparelho' });
-  await sharing.getByRole('button', { name: 'Gerar convite privado', exact: true }).click();
-  await sharing.getByLabel('Convite desta viagem').waitFor();
-  const tripInviteUrl = await sharing.getByLabel('Convite desta viagem').inputValue();
-  assert.match(tripInviteUrl,/\/#convite=[0-9a-f]{64}$/);
-  assert.equal((await owner.page.evaluate(()=>JSON.stringify(localStorage))).includes(new URL(tripInviteUrl).hash.slice('#convite='.length)),false,'invitation tokens are never cached');
-  await sharing.getByRole('button', { name: 'Fechar formulário' }).click();
-  passed('Compartilhar gera convite restrito à viagem, com escopos visíveis e sem guardar o token no cache.');
 
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
   await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', osm: true });
@@ -828,6 +823,7 @@ try {
   assert.equal(await owner.page.getByText('Gasto só da segunda viagem',{exact:true}).count(),0);
   passed('Pesquisa e filtro por período funcionam; arquivar/desarquivar preserva atividades, gastos, datas e orçamento sem afetar a viagem anterior.');
 
+  const tripInviteUrl = `${appOrigin}/#convite=${tripOnlyToken}`;
   const tripOnly=await context({viewport:{width:1280,height:800}});
   await tripOnly.page.goto(tripInviteUrl);
   await visibleText(tripOnly.page,'Teste conflito resolvido');
@@ -838,15 +834,8 @@ try {
   await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
   assert.equal(await tripOnly.page.getByText('Momento só da segunda viagem',{exact:true}).count(),0);
   await navigate(owner.page,'Trocar viagem');
-  await navigate(owner.page,'Convidar aparelho');
-  const collectionSharing=owner.page.getByRole('dialog',{name:'Nossos planos em outro aparelho'});
-  assert.equal(await collectionSharing.getByRole('button',{name:'Gerar convite privado',exact:true}).isDisabled(),true);
-  await collectionSharing.getByRole('checkbox').check();
-  await collectionSharing.getByRole('button',{name:'Gerar convite privado',exact:true}).click();
-  await collectionSharing.getByLabel('Convite da coleção').waitFor();
-  const collectionInviteUrl=await collectionSharing.getByLabel('Convite da coleção').inputValue();
-  assert.match(collectionInviteUrl,/\/#colecao=[0-9a-f]{64}$/);
-  await collectionSharing.getByRole('button',{name:'Fechar formulário'}).click();
+  assert.equal(await owner.page.getByRole('button',{name:'Convidar aparelho',exact:true}).count(),0);
+  const collectionInviteUrl=`${appOrigin}/#colecao=${collectionGuestToken}`;
   const collectionDevice=await context({viewport:{width:360,height:780}});
   await collectionDevice.page.goto(collectionInviteUrl);
   await collectionDevice.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();

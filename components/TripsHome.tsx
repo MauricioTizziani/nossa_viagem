@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowLeft, ArrowRight, CalendarDays, Heart, LoaderCircle, MapPin, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, WifiOff } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, ArrowRight, CalendarDays, Heart, LoaderCircle, MapPin, MoreHorizontal, Pencil, Plus, RefreshCw, Search, ShieldCheck, Sparkles, WifiOff } from 'lucide-react';
 import { DEFAULT_TIMEZONE, type Trip, type TripCard, type TripListFilter } from '@/lib/types';
 import { formatCurrency, tripStatus } from '@/lib/domain';
 import { UNDEFINED_BUDGET_LABEL } from '@/lib/budget';
@@ -8,7 +8,6 @@ import { orderedTrips, TRIP_GROUP_LABELS, TRIP_PHASE_LABELS, TRIP_PHASE_ORDER, t
 import { useTrips } from '@/lib/useTrips';
 import { friendlyError } from '@/lib/useTravelData';
 import TripSettings from './TripSettings';
-import TripLink from './TripLink';
 import Modal from './Modal';
 import PwaManager from './PwaManager';
 
@@ -34,10 +33,7 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
   const archiveLocked = useRef(false);
   const [actionError, setActionError] = useState('');
   const [toast, setToast] = useState('');
-  const [sharingCollection, setSharingCollection] = useState<string | null>(null);
-  const [choosingShare, setChoosingShare] = useState(false);
   const invitedOpened = useRef<string | null>(null);
-  const ownerCollections = data.collections.filter(collection => collection.role === 'owner');
   useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 250); return () => clearTimeout(timer); }, [search]);
   useEffect(() => {
     const tick = () => setNow(new Date());
@@ -70,10 +66,6 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
     const example = data.trips.find(trip => trip.collection_id === id);
     return example ? `Coleção de ${example.name}` : `Nossas viagens ${data.collections.length > 1 ? `· coleção ${index + 1}` : ''}`;
   }
-  function shareCollection() {
-    if (ownerCollections.length === 1) setSharingCollection(ownerCollections[0].id);
-    else setChoosingShare(true);
-  }
   const sorted = orderedTrips(data.trips, now ?? new Date());
   const visibleGroups = TRIP_PHASE_ORDER.map(phase => ({ phase, trips: sorted.filter(trip => tripStatus(trip, now ?? new Date()).phase === phase) })).filter(group => group.trips.length);
   const displaySyncedAt = data.syncedAt ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: DEFAULT_TIMEZONE }).format(new Date(data.syncedAt)) : null;
@@ -81,12 +73,12 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
     <header className="topbar"><div className="topbar-inner"><a className="brand" href="/viagens" onClick={event => { event.preventDefault(); onNavigate('/viagens'); }} aria-label="Nossas Viagens, Minhas viagens"><img src="/logo.png" alt="" width="48" height="48"/><span>Nossas <strong>Viagens</strong><small>nosso cantinho de planos</small></span></a><div className="header-actions"><span className="private-label"><ShieldCheck size={14}/>Nossas viagens privadas</span>{create ? <button className="button-secondary" onClick={() => onNavigate('/viagens')}><ArrowLeft size={16}/>Minhas viagens</button> : <button className="button-primary" onClick={() => onNavigate('/viagens/nova')}><Plus size={17}/>Nova viagem</button>}</div></div></header>
     <main className="main-content trips-main">
       {!data.online && <div className="connection-banner" role="status"><WifiOff size={20}/><div><strong>Consulta offline neste aparelho</strong><span>{displaySyncedAt ? `Última sincronização da lista: ${displaySyncedAt}. ` : ''}Somente as viagens sincronizadas neste aparelho estão disponíveis; o histórico pode estar incompleto. Conecte-se para confirmar cadastros, alterações e arquivamentos.</span></div></div>}
-      {data.status === 'unconfigured' && <div className="notice access-notice"><ShieldCheck size={19}/><p>Conecte o Supabase e aplique as migrações descritas no README para guardar suas viagens e autorizar os aparelhos de vocês. Nenhuma viagem foi preenchida automaticamente.</p></div>}
+      {data.status === 'unconfigured' && <div className="notice access-notice"><ShieldCheck size={19}/><p>Conecte o Supabase e aplique as migrações descritas no README para guardar suas viagens. Nenhuma viagem foi preenchida automaticamente.</p></div>}
       {data.error && <div className="notice notice-error app-error" role="alert"><p>{data.error}</p><button className="text-button" disabled={!data.online} onClick={() => void data.refresh()}><RefreshCw size={16}/>Tentar novamente</button></div>}
       {create ? <>
         <div className="page-heading"><p className="eyebrow"><Sparkles size={13}/>Qual será o próximo destino?</p><h1>Nova viagem</h1><p>Comece a planejar uma nova viagem. As anteriores continuam com vocês.</p></div>
-        {!!data.collections.length && <section className="paper-card new-trip-collection"><label className="field-label">Guardar com quais viagens?<select value={selectedCollection} onChange={event => { collectionTouched.current = true; setSelectedCollection(event.target.value); setCollectionDirty(true); }}>{data.collections.map((collection, index) => <option key={collection.id} value={collection.id}>{collectionLabel(collection.id, index)}</option>)}<option value="">Criar uma coleção privada separada</option></select><span className="field-hint">Os aparelhos autorizados à coleção escolhida também poderão acessar esta viagem. Convites de uma viagem específica não dão esse acesso.</span></label></section>}
-        <TripSettings mode="create" trip={emptyTrip} online={data.online} canSave={data.status === 'ready'} canShare={false} onDirtyChange={setFormDirty} onShare={() => {}} onLoadLatest={async () => emptyTrip} onSave={async values => {
+        {!!data.collections.length && <section className="paper-card new-trip-collection"><label className="field-label">Guardar com quais viagens?<select value={selectedCollection} onChange={event => { collectionTouched.current = true; setSelectedCollection(event.target.value); setCollectionDirty(true); }}>{data.collections.map((collection, index) => <option key={collection.id} value={collection.id}>{collectionLabel(collection.id, index)}</option>)}<option value="">Criar uma coleção privada separada</option></select><span className="field-hint">A nova viagem fica agrupada com as viagens da coleção escolhida.</span></label></section>}
+        <TripSettings mode="create" trip={emptyTrip} online={data.online} canSave={data.status === 'ready'} onDirtyChange={setFormDirty} onLoadLatest={async () => emptyTrip} onSave={async values => {
           onBusyChange(true);
           try {
             const saved = await data.createTrip(values, selectedCollection || null);
@@ -95,7 +87,7 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
         }}/>
       </> : <>
         <section className="trips-welcome"><div><p className="eyebrow"><Heart size={13}/>Nossas próximas aventuras</p><h1>Minhas viagens</h1><p>Novos destinos pela frente, memórias sempre por perto.</p></div><div className="trips-welcome-art" aria-hidden="true"><MapPin size={43} strokeWidth={1.3}/><Heart size={21}/><Sparkles size={18}/></div></section>
-        <div className="trips-toolbar"><label className="trips-search"><Search size={19}/><span className="sr-only">Pesquisar por nome ou destino</span><input type="search" placeholder="Pesquisar por nome ou destino" value={search} onChange={event => setSearch(event.target.value)}/></label>{!!ownerCollections.length && <button className="button-secondary" disabled={!data.online || data.status !== 'ready'} onClick={shareCollection}><Share2 size={17}/>Convidar aparelho</button>}</div>
+        <div className="trips-toolbar"><label className="trips-search"><Search size={19}/><span className="sr-only">Pesquisar por nome ou destino</span><input type="search" placeholder="Pesquisar por nome ou destino" value={search} onChange={event => setSearch(event.target.value)}/></label></div>
         <nav className="trips-filters" aria-label="Filtrar viagens">{filters.map(item => <button key={item.value} aria-pressed={filter === item.value} className={filter === item.value ? 'active' : ''} onClick={() => setFilter(item.value)}>{item.value === 'archived' && <Archive size={14}/>} {item.label}</button>)}</nav>
         {data.status === 'loading' ? <div className="loading-state" role="status"><LoaderCircle size={30} className="spin"/><p>Preparando nossas aventuras…</p></div> : !sorted.length ? <section className="paper-card trips-empty"><span className="section-icon pink-icon"><Heart size={25}/></span><h2>{search.trim() ? 'Nenhuma viagem por aqui' : filter === 'archived' ? 'Memórias guardadas com carinho' : filter !== 'all' ? 'Nenhuma viagem neste período' : 'Qual será o próximo destino?'}</h2><p>{search.trim() ? 'Tente outro nome ou destino para encontrar sua viagem.' : filter === 'archived' ? 'As viagens que vocês arquivarem aparecerão aqui, com todos os seus registros.' : filter !== 'all' ? 'Suas viagens aparecem aqui conforme as datas de cada aventura.' : 'Comece a planejar uma nova viagem. Este cantinho vai guardar suas próximas aventuras e as memórias das anteriores.'}</p>{filter === 'all' && !search.trim() && <button className="button-primary" onClick={() => onNavigate('/viagens/nova')}><Plus size={17}/>Cadastrar primeira viagem</button>}</section> : <div className="trip-groups">{visibleGroups.map(group => <section className="trip-group" key={group.phase}><div className="trip-group-heading"><h2>{filter === 'archived' ? `Arquivadas · ${TRIP_PHASE_LABELS[group.phase]}` : TRIP_GROUP_LABELS[group.phase]}</h2><span>{group.trips.length} {group.trips.length === 1 ? 'viagem' : 'viagens'} carregadas</span></div><div className="trips-grid">{group.trips.map(trip => <article className="paper-card trip-card" key={trip.id}>
           <div className="trip-card-top"><span className={`trip-phase ${group.phase}`}>{trip.archived_at ? <Archive size={13}/> : <Heart size={13}/>} {trip.archived_at ? 'Arquivada' : TRIP_PHASE_LABELS[group.phase]}</span><details className="trip-card-menu"><summary aria-label={`Ações de ${trip.name}`}><MoreHorizontal size={21}/></summary><div><button onClick={() => onNavigate(`/viagens/${trip.id}/detalhes`)}><Pencil size={15}/>Editar viagem</button><button disabled={!data.online} onClick={() => { setActionError(''); setArchiving(trip); }}>{trip.archived_at ? <ArchiveRestore size={15}/> : <Archive size={15}/>} {trip.archived_at ? 'Desarquivar' : 'Arquivar'}</button></div></details></div>
@@ -108,8 +100,6 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
       <footer className="page-footer"><span><Heart size={12}/>Feito para nossos próximos momentos.</span><span><a href="/termos">Termos</a> · <a href="/privacidade">Privacidade</a></span>{displaySyncedAt && data.online && <span>Lista sincronizada em {displaySyncedAt}</span>}</footer><div className="pwa-controls"><PwaManager hasUnsavedChanges={dirty}/></div>
     </main>
     {archiving && <Modal title={archiving.archived_at ? 'Trazer esta viagem de volta?' : 'Guardar esta viagem no arquivo?'} subtitle="Cronograma, gastos e orçamento permanecem salvos." onClose={() => { if (!archiveBusy) setArchiving(null); }}><div className="delete-content"><p>{archiving.archived_at ? <>Desarquivar <strong>{archiving.name}</strong> para voltar à lista de viagens? Sua situação será atualizada pelas datas atuais.</> : <>Arquivar <strong>{archiving.name}</strong>? Você poderá abri-la e fazer ajustes pelo filtro Arquivadas.</>}</p>{actionError && <p className="notice notice-error" role="alert">{actionError}</p>}<div className="form-footer"><button className="button-secondary" disabled={archiveBusy} onClick={() => setArchiving(null)}>Cancelar</button><button className="button-primary" disabled={archiveBusy || !data.online} onClick={() => void archive()}>{archiveBusy ? <LoaderCircle size={17} className="spin"/> : archiving.archived_at ? <ArchiveRestore size={17}/> : <Archive size={17}/>} {archiving.archived_at ? 'Desarquivar viagem' : 'Arquivar viagem'}</button></div></div></Modal>}
-    {choosingShare && <Modal title="Quais viagens compartilhar?" subtitle="O convite autorizará as viagens atuais e futuras da coleção escolhida." onClose={() => setChoosingShare(false)}><div className="share-content">{ownerCollections.map((collection, index) => <button className="button-secondary" key={collection.id} onClick={() => { setChoosingShare(false); setSharingCollection(collection.id); }}><Heart size={17}/>{collectionLabel(collection.id, index)}</button>)}</div></Modal>}
-    {sharingCollection && <TripLink online={data.online} collectionId={sharingCollection} canShareCollection onClose={() => setSharingCollection(null)}/>}
     {toast && <div className="toast" role="status"><CheckIcon/>{toast}</div>}
   </div>;
 }

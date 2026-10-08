@@ -1,15 +1,15 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { CalendarDays, Check, Heart, MapPin, Settings2, Share2, LoaderCircle, RefreshCw } from 'lucide-react';
+import { CalendarDays, Check, Heart, MapPin, Settings2, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { Trip } from '@/lib/types';
 import { INITIAL_BUDGET_HELP, UNDEFINED_BUDGET_LABEL, formatBudgetInput, parseInitialBudgetCents } from '@/lib/budget';
 import { validateTripInput } from '@/lib/domain';
 import { friendlyError } from '@/lib/useTravelData';
 const timezones = ['America/Sao_Paulo', 'America/Manaus', 'America/Fortaleza', 'America/Rio_Branco', 'America/New_York', 'Europe/Lisbon', 'Europe/Paris', 'Europe/London', 'Asia/Tokyo', 'Australia/Sydney'];
-export default function TripSettings({ trip, online, canShare, canSave = true, mode = 'edit', focusBudget = false, onSave, onShare, onDirtyChange, onLoadLatest, onBudgetFocused }: {
-  trip: Trip; online: boolean; canShare: boolean; canSave?: boolean; mode?: 'create' | 'edit'; focusBudget?: boolean;
+export default function TripSettings({ trip, online, canSave = true, mode = 'edit', focusBudget = false, onSave, onDirtyChange, onLoadLatest, onBudgetFocused }: {
+  trip: Trip; online: boolean; canSave?: boolean; mode?: 'create' | 'edit'; focusBudget?: boolean;
   onSave: (values: Omit<Trip, 'id' | 'version'>, version: number, options: { touchBudget: boolean }) => Promise<void>;
-  onShare: () => void; onDirtyChange: (value: boolean) => void;
+  onDirtyChange: (value: boolean) => void;
   onLoadLatest: () => Promise<Trip>;
   onBudgetFocused?: () => void;
 }) {
@@ -80,5 +80,5 @@ export default function TripSettings({ trip, online, canShare, canSave = true, m
       {success && <p className="success-message" role="status"><Check size={16}/>{mode === 'create' ? 'Viagem criada. Preparando sua aventura…' : 'Sua viagem foi atualizada.'}</p>}
       <div className="form-footer"><button className="button-primary" type="submit" disabled={saving || !online || !canSave}>{saving ? <LoaderCircle size={18} className="spin"/> : <Check size={18}/>} {saving ? 'Salvando…' : mode === 'create' ? 'Criar viagem' : 'Salvar nossa viagem'}</button></div>
     </fieldset></form>
-  </section><aside className="settings-aside"><section className="paper-card share-card"><span className="section-icon pink-icon"><Heart size={23}/></span><h3>{mode === 'create' ? 'Uma nova história a dois' : 'Uma viagem, vários aparelhos'}</h3><p>{mode === 'create' ? 'A nova viagem começa com cronograma e gastos vazios. Suas outras aventuras e memórias continuam guardadas.' : 'Autorize outro aparelho por um convite privado para acompanhar os planos juntos, sem login e senha.'}</p>{mode === 'edit' && <><button className="button-secondary" onClick={onShare} disabled={!canShare}><Share2 size={17}/>Convidar outro aparelho</button><p className="field-hint">O endereço da viagem sozinho não concede acesso. Somente responsáveis pela viagem ou coleção podem criar convites.</p></>}</section><div className="quiet-note"><CalendarDays size={20}/><p>Não precisa decidir tudo agora.<br/>Os melhores planos também têm espaço para o inesperado.</p></div></aside></div>;
+  </section><aside className="settings-aside">{mode === 'create' && <section className="paper-card share-card"><span className="section-icon pink-icon"><Heart size={23}/></span><h3>Uma nova história a dois</h3><p>A nova viagem começa com cronograma e gastos vazios. Suas outras aventuras e memórias continuam guardadas.</p></section>}<div className="quiet-note"><CalendarDays size={20}/><p>Não precisa decidir tudo agora.<br/>Os melhores planos também têm espaço para o inesperado.</p></div></aside></div>;
 }
