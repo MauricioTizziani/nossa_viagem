@@ -603,10 +603,11 @@ test('fresh open installation creates exactly one empty shared trip for all sess
       create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
       grant usage on schema public,auth,extensions to anon,authenticated,service_role;
       insert into auth.users(id) values('${owner}'),('${member}'); create publication supabase_realtime;`);
-    for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql','202610080003_acesso_livre.sql','202610080004_gastos.sql']) await fresh.exec(await readFile(new URL(`../migrations/${filename}`,import.meta.url),'utf8'));
+    for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql','202610080003_acesso_livre.sql','202610080004_gastos.sql','202610080005_orcamento_inicial.sql']) await fresh.exec(await readFile(new URL(`../migrations/${filename}`,import.meta.url),'utf8'));
     const created = (await fresh.query('select * from public.trips')).rows;
     assert.equal(created.length, 1);
     assert.equal(created[0].destination, null);
+    assert.equal(created[0].initial_budget_cents, null, 'a new shared trip does not invent a zero budget');
     assert.equal((await fresh.query('select count(*)::int as n from public.trip_expenses')).rows[0].n, 0, 'no fictitious expenses are seeded');
     assert.equal((await fresh.query("select relrowsecurity from pg_class where oid='public.trip_expenses'::regclass")).rows[0].relrowsecurity, true);
     await fresh.exec('set role authenticated');
@@ -618,4 +619,42 @@ test('fresh open installation creates exactly one empty shared trip for all sess
     assert.equal((await fresh.query('select count(*)::int as n from public.activities')).rows[0].n, 0);
     assert.equal((await fresh.query('select count(*)::int as n from public.trips')).rows[0].n, 1);
   } finally { await fresh.close(); }
+});
+
+test('initial budget migration preserves trips and keeps planning and spending independent', async () => {
+  await as('postgres');
+  const before = {
+    trips: (await row('select count(*)::int as n from public.trips')).n,
+    activities: (await row('select count(*)::int as n from public.activities')).n,
+    expenses: (await row('select count(*)::int as n from public.trip_expenses')).n,
+  };
+  const migration = await readFile(new URL('../migrations/202610080005_orcamento_inicial.sql', import.meta.url), 'utf8');
+  await db.exec(migration);
+  await db.exec(migration);
+  assert.equal((await row('select count(*)::int as n from public.trips')).n, before.trips);
+  assert.equal((await row('select count(*)::int as n from public.activities')).n, before.activities);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses')).n, before.expenses);
+  assert.equal((await row('select initial_budget_cents from public.trips where id=$1', [tripId])).initial_budget_cents, null);
+  assert.equal((await row('select initial_budget_cents from public.trips where id=$1', [otherTripId])).initial_budget_cents, null);
+  await as('authenticated', owner);
+  const current = await row('select * from public.trips where id=$1', [tripId]);
+  const defined = await row('select * from public.update_trip($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)', [tripId, current.version, current.name, current.destination, current.start_date, current.end_date, current.timezone, current.person_one, current.person_two, 200000]);
+  assert.equal(Number(defined.initial_budget_cents), 200000);
+  const preserved = await row('select * from public.update_trip($1,$2,$3,$4,$5,$6,$7,$8,$9)', [tripId, defined.version, defined.name, defined.destination, defined.start_date, defined.end_date, defined.timezone, defined.person_one, defined.person_two]);
+  assert.equal(Number(preserved.initial_budget_cents), 200000, 'omitting the budget arguments does not clear or zero it');
+  const zero = await row('select * from public.update_trip($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)', [tripId, preserved.version, preserved.name, preserved.destination, preserved.start_date, preserved.end_date, preserved.timezone, preserved.person_one, preserved.person_two, 0]);
+  assert.equal(zero.initial_budget_cents === null, false);
+  assert.equal(Number(zero.initial_budget_cents), 0);
+  await assert.rejects(row('select * from public.update_trip($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)', [tripId, zero.version, zero.name, zero.destination, zero.start_date, zero.end_date, zero.timezone, zero.person_one, zero.person_two, -1]), /INVALID_INITIAL_BUDGET|check constraint/);
+  assert.equal(Number((await row('select initial_budget_cents from public.trips where id=$1', [tripId])).initial_budget_cents), 0);
+  const planned = await save({ id: '20000000-0000-4000-8000-000000000090', name: 'Plano do orçamento', budget: 150000 });
+  await spend({ id: '40000000-0000-4000-8000-000000000090', description: 'Gasto do orçamento', category: 'Outros', amount: 80000, date: '2026-10-01' });
+  const reference = await row('select initial_budget_cents from public.trips where id=$1', [tripId]);
+  assert.equal(Number(reference.initial_budget_cents), 0, 'activities and expenses do not change the stored reference');
+  assert.equal(Number((await row('select budget_cents from public.activities where id=$1', [planned.id])).budget_cents), 150000);
+  assert.equal(Number((await row('select amount_cents from public.trip_expenses where id=$1', ['40000000-0000-4000-8000-000000000090'])).amount_cents), 80000);
+  await as('postgres');
+  assert.equal((await row('select count(*)::int as n from public.trips')).n, before.trips);
+  await as('authenticated', member);
+  await fails('select * from public.update_trip($1,1,\'Intrusion\',null,null,null,\'America/Sao_Paulo\',null,null,100,true)', [otherTripId]);
 });

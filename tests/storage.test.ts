@@ -10,7 +10,7 @@ class MemoryStorage {
   keys() { return [...this.items.keys()]; }
 }
 Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true });
-const snapshot = (userId: string, tripId: string): Snapshot => ({ userId, role: 'member', syncedAt: '2026-10-08T12:00:00Z', trip: { id: tripId, name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, version: 1 }, activities: [], expenses: [] });
+const snapshot = (userId: string, tripId: string): Snapshot => ({ userId, role: 'member', syncedAt: '2026-10-08T12:00:00Z', trip: { id: tripId, name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, version: 1 }, activities: [], expenses: [] });
 test('offline snapshots are scoped by previously authorized session and trip', () => {
   localStorage.clear();
   assert.equal(readOfflineSnapshot(), null);
@@ -44,6 +44,26 @@ test('expenses are kept in the same private snapshot and older snapshots without
   storage.setItem(key, JSON.stringify(legacy));
   assert.equal(readSnapshot('session-c'), null);
   clearSnapshot('session-c');
+});
+test('an older snapshot without an initial budget stays unset, while zero remains zero', () => {
+  localStorage.clear();
+  saveSnapshot(snapshot('session-budget', 'trip-budget'));
+  const storage = globalThis.localStorage as unknown as MemoryStorage;
+  const key = storage.keys().find((item) => item.endsWith(':session-budget:trip-budget'))!;
+  const legacy = JSON.parse(storage.getItem(key)!);
+  delete legacy.trip.initial_budget_cents;
+  storage.setItem(key, JSON.stringify(legacy));
+  assert.equal(readSnapshot('session-budget')?.trip.initial_budget_cents, null);
+  legacy.trip.initial_budget_cents = 0;
+  storage.setItem(key, JSON.stringify(legacy));
+  assert.equal(readSnapshot('session-budget')?.trip.initial_budget_cents, 0);
+  legacy.trip.initial_budget_cents = '200000';
+  storage.setItem(key, JSON.stringify(legacy));
+  assert.equal(readSnapshot('session-budget')?.trip.initial_budget_cents, 200000);
+  legacy.trip.initial_budget_cents = -1;
+  storage.setItem(key, JSON.stringify(legacy));
+  assert.equal(readSnapshot('session-budget'), null);
+  clearSnapshot('session-budget');
 });
 test('disabled browser storage cannot prevent online application use', () => {
   const previous = globalThis.localStorage;

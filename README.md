@@ -4,7 +4,7 @@ Aplicativo para planejar uma viagem a dois, com acesso aberto pelo endereço do 
 
 O cronograma preserva os cinco campos: **Data e hora**, **Orçamento (R$)**, **Nome da atividade**, **Lugar** e **Tipo**. As categorias são exatamente Refeição, Lazer e Atividade. O orçamento é planejamento, em centavos inteiros; `null` significa “A definir” e zero significa R$ 0,00. Os valores são totais por atividade, sem multiplicação ou divisão entre as pessoas.
 
-A aba **Gastos** registra o que foi efetivamente pago, de forma independente do cronograma. Orçamento (plano) e gasto (pago) nunca se misturam: o total gasto soma apenas os registros da aba Gastos. Veja [Gastos da viagem](#gastos-da-viagem).
+A aba **Gastos** registra o que foi efetivamente pago, de forma independente do cronograma. A viagem também tem um **orçamento inicial** próprio. O saldo do planejamento é esse valor menos a soma dos orçamentos do cronograma. O saldo dos gastos é o mesmo valor menos a soma das despesas registradas. Os dois saldos não se descontam. Veja [Gastos da viagem](#gastos-da-viagem).
 
 Não há tela de login. Uma sessão anônima identifica cada navegador e abre automaticamente a mesma viagem para todos que acessarem o aplicativo. Instalações novas começam vazias, sem nomes, destino, período ou atividades fictícias; atualizações preservam os planos existentes.
 
@@ -33,12 +33,12 @@ As variáveis `NEXT_PUBLIC_` entram no código do navegador. Os arquivos `.env.l
 
 1. Crie um projeto dedicado e copie sua URL e sua chave **publishable** para `.env.local`.
 2. Em Authentication, habilite **Anonymous Sign-Ins**. Mantenha a criação de usuários permitida para este fluxo. Não é necessário configurar e-mail, senha ou provedores sociais.
-3. No SQL Editor, execute as migrações 001, 002, 003 e 004, nessa ordem. Se as três primeiras já foram executadas, execute somente `supabase/migrations/202610080004_gastos.sql`: ela cria a tabela `trip_expenses` da aba Gastos preservando viagem, atividades e acesso existentes, e pode ser executada novamente sem duplicar estruturas. Se uma execução anterior recusou categorias com acento, execute esse mesmo arquivo outra vez: ele corrige a regra e os registros afetados, sem apagar gastos. Depois, atualize/reinicie o aplicativo.
+3. No SQL Editor, execute as migrações 001, 002, 003, 004 e 005, nessa ordem. Se as anteriores já foram executadas, execute somente as que faltam. `supabase/migrations/202610080004_gastos.sql` cria a tabela `trip_expenses` preservando viagem, atividades e acesso existentes, e pode ser executada novamente sem duplicar estruturas. Se uma execução anterior recusou categorias com acento, execute esse mesmo arquivo outra vez: ele corrige a regra e os registros afetados, sem apagar gastos. `supabase/migrations/202610080005_orcamento_inicial.sql` acrescenta `initial_budget_cents` à viagem, sem preencher viagens antigas e sem apagar dados. Depois, atualize/reinicie o aplicativo.
 4. Deixe `public` exposto pela Data API. **Não exponha `private`**: ele contém apenas funções auxiliares e recibos de resgate. As tabelas de acesso não recebem permissões de escrita para navegadores.
 5. Confira em Database → Publications que `trips` integra `supabase_realtime`. Não adicione `trip_invites`, `trip_members`, `activities` ou `trip_expenses` à publicação por conta própria. Todas as alterações do cronograma e dos gastos atualizam `trips.updated_at` para sinalizar a viagem e fazer uma nova leitura protegida por RLS.
 6. Em Auth, configure Site URL com o endereço da aplicação. Use um domínio HTTPS quando publicar.
 
-Alternativamente, use a CLI oficial em um projeto já inicializado: `supabase link --project-ref SEU_PROJECT_REF` e `supabase db push`. A migração inicial é para um banco novo; não execute os arquivos 001 e 002 novamente no SQL Editor sobre tabelas já criadas. As migrações 003 e 004 são incrementais e toleram repetição.
+Alternativamente, use a CLI oficial em um projeto já inicializado: `supabase link --project-ref SEU_PROJECT_REF` e `supabase db push`. A migração inicial é para um banco novo; não execute os arquivos 001 e 002 novamente no SQL Editor sobre tabelas já criadas. As migrações 003, 004 e 005 são incrementais e toleram repetição.
 
 Nenhuma variável de ambiente nova é necessária para a aba Gastos. Enquanto a migração 004 não for aplicada, o cronograma continua funcionando e a aba Gastos exibe um aviso indicando o arquivo pendente, sem gravar nada.
 
@@ -80,7 +80,7 @@ Regras de valor e data:
 
 - O valor é o total pago pelo casal, em centavos inteiros, sempre maior que zero; não há multiplicação por pessoa, divisão de despesas, acerto de contas, contas a pagar ou parcelas.
 - A data é uma data de calendário (`YYYY-MM-DD`), exibida como DD/MM/AAAA. O formulário sugere o dia atual no fuso da viagem; a data escolhida é gravada exatamente, sem deslocamento por fuso do aparelho. Gastos antes ou depois do período da viagem são aceitos, por exemplo uma hospedagem paga antecipadamente.
-- O total gasto soma cada registro uma única vez e ignora completamente os orçamentos do cronograma. Não existe orçamento global novo nem indicador de “saldo” ou “estouro” entre orçamento e gastos.
+- O total gasto soma cada registro uma única vez e ignora os orçamentos do cronograma. O orçamento inicial da viagem é uma referência à parte: o saldo do planejamento é `orçamento inicial − total planejado` e o saldo dos gastos é `orçamento inicial − total gasto`. Nunca se calcula `orçamento inicial − planejado − gasto`.
 
 A lista vem ordenada da data mais recente para a mais antiga e mostra, por padrão, todos os gastos. Os filtros combinam pesquisa por descrição, categoria e período inclusivo (a data final não pode ser anterior à inicial) e podem ser limpos com **Limpar filtros**. Com filtros ativos, o cartão **Total gasto na viagem** continua inteiro e um **Subtotal dos filtros** indica quantos registros correspondem; o total por categoria avisa quando considera apenas os resultados filtrados. Se um gasto salvo ficar fora dos filtros atuais, a interface avisa. No computador os gastos aparecem em tabela (Data, Descrição, Categoria, Valor e ações) e no celular em cartões, sem rolagem horizontal. Edição e exclusão com confirmação atualizam os totais; fechar o formulário com alterações pede confirmação.
 
@@ -123,7 +123,7 @@ Cada `npm run build` gera automaticamente uma versão do service worker a partir
 2. Publique o projeto em uma hospedagem com suporte a Next.js, como Vercel, ou execute `npm start` em um servidor Node atrás de HTTPS. Esta aplicação não usa exportação HTML estática.
 3. Configure **somente** as variáveis públicas de `.env.example` na hospedagem. Chaves administrativas permanecem no computador proprietário.
 4. Ajuste `NEXT_PUBLIC_APP_URL` e Site URL do Supabase para o domínio final. Recompile após mudar valores públicos. Photon não exige configuração de chave nem de faturamento.
-5. Aplique as migrações 003 e 004 no Supabase e abra o endereço da aplicação; a entrada será automática em qualquer aparelho.
+5. Aplique as migrações 003, 004 e 005 no Supabase e abra o endereço da aplicação; a entrada será automática em qualquer aparelho. Viagens já existentes ficam com o orçamento inicial não definido até que ele seja informado em **Nossa viagem**.
 6. Valide aparelhos novos entrando automaticamente, consulta offline e a instalação da PWA no domínio HTTPS.
 
 Mantenha respostas e páginas privadas fora de cache compartilhado/CDN. A aplicação consulta os dados do usuário no navegador com sua sessão, e configura cabeçalhos sem cache para navegação privada. Não adicione analytics ou logs que capturem tokens, corpos de convites ou registros privados.

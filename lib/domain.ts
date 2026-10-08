@@ -241,7 +241,7 @@ export function validateActivityInput(input: ActivityInput): ActivityInput {
     osm_place_id: input.osm_place_id ?? null, osm_place_name: input.osm_place_name?.trim() || null, osm_place_address: input.osm_place_address?.trim() || null, osm_latitude: input.osm_latitude ?? null, osm_longitude: input.osm_longitude ?? null };
 }
 
-export function validateTripInput(trip: Pick<Trip, "name" | "destination" | "start_date" | "end_date" | "timezone" | "person_one" | "person_two">) {
+export function validateTripInput(trip: Pick<Trip, "name" | "destination" | "start_date" | "end_date" | "timezone" | "person_one" | "person_two" | "initial_budget_cents">, options?: { requireInitialBudget?: boolean }) {
   if (!trip.name.trim()) throw new Error("Informe o nome da viagem.");
   if (trip.name.trim().length > 160) throw new Error("O nome da viagem deve ter até 160 caracteres.");
   if (trip.destination.trim().length > 240) throw new Error("O destino deve ter até 240 caracteres.");
@@ -249,5 +249,8 @@ export function validateTripInput(trip: Pick<Trip, "name" | "destination" | "sta
   if (!isValidTimezone(trip.timezone)) throw new Error("Escolha um fuso horário válido.");
   if ((trip.start_date && !isValidDate(trip.start_date)) || (trip.end_date && !isValidDate(trip.end_date))) throw new Error("Escolha datas válidas para a viagem.");
   if (trip.start_date && trip.end_date && trip.end_date < trip.start_date) throw new Error("A data final não pode ser anterior à data inicial.");
-  return { ...trip, name: trip.name.trim(), destination: trip.destination.trim(), person_one: trip.person_one?.trim() || null, person_two: trip.person_two?.trim() || null };
+  const initialBudgetCents = trip.initial_budget_cents ?? null;
+  if (options?.requireInitialBudget && initialBudgetCents === null) throw new Error("Informe o orçamento inicial da viagem.");
+  if (initialBudgetCents !== null && (!Number.isSafeInteger(initialBudgetCents) || initialBudgetCents < 0 || initialBudgetCents > MAX_BUDGET_CENTS)) throw new Error("Informe um orçamento inicial válido e não negativo.");
+  return { ...trip, name: trip.name.trim(), destination: trip.destination.trim(), person_one: trip.person_one?.trim() || null, person_two: trip.person_two?.trim() || null, initial_budget_cents: initialBudgetCents };
 }

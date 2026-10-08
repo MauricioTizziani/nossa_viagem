@@ -11,6 +11,8 @@ export interface Trip {
   timezone: string;
   person_one: string | null;
   person_two: string | null;
+  /** Couple's reference budget in integer centavos. Null means not informed; zero is a real budget. Never reduced by activities or expenses. */
+  initial_budget_cents: number | null;
   version: number;
   created_at?: string;
   updated_at?: string;

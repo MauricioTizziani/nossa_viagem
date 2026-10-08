@@ -5,12 +5,15 @@ import type { Activity, Expense, Trip } from "../lib/types";
 import { EXPENSE_CATEGORIES } from "../lib/types";
 import { formatCurrency, formatDay, groupActivities, sortActivities, summarizeActivities } from "../lib/domain";
 import { summarizeExpenses } from "../lib/expenses";
+import { tripBudgetView } from "../lib/budget";
 import { CategoryIcon, ExpenseCategoryIcon, expenseCategoryStyle } from "./Icons";
+import { BudgetFollowUp, BudgetReference } from "./BudgetFollowUp";
 
-interface TripSummaryProps { activities: Activity[]; expenses?: Expense[]; trip: Trip; onOpenExpenses?: () => void }
+interface TripSummaryProps { activities: Activity[]; expenses?: Expense[]; trip: Trip; expensesReady?: boolean; offline?: boolean; onOpenExpenses?: () => void; onDefineBudget?: () => void }
 
-export function TripSummary({ activities, expenses = [], trip, onOpenExpenses }: TripSummaryProps) {
+export function TripSummary({ activities, expenses = [], trip, expensesReady = true, offline = false, onOpenExpenses, onDefineBudget }: TripSummaryProps) {
   const summary = summarizeActivities(activities);
+  const budget = tripBudgetView(trip, activities, expensesReady ? expenses : null);
   const total = summary.totalCents;
   const pending = summary.undefinedBudgetCount;
   const groups = groupActivities(sortActivities(activities), trip.timezone);
@@ -23,7 +26,13 @@ export function TripSummary({ activities, expenses = [], trip, onOpenExpenses }:
       <div>
         <div className="mb-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6b7f94]"><Heart className="h-3.5 w-3.5 text-[#bf96aa]" aria-hidden="true" />Nossa viagem, em pequenos planos</div>
         <h1 id="summary-heading" className="text-[28px] font-semibold leading-tight tracking-[-0.035em] text-[#3b5f86] sm:text-[34px]">O que estamos planejando</h1>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-[#667b91]">Um olhar sobre os momentos e o orçamento da nossa próxima aventura.</p>
+        <p className="mt-2 max-w-xl text-sm leading-6 text-[#667b91]">Um olhar sobre os momentos, o planejamento e os gastos da nossa próxima aventura.</p>
+      </div>
+
+      <BudgetReference cents={budget.initialCents} onDefine={onDefineBudget} />
+      <div className="grid gap-4 md:grid-cols-2">
+        <BudgetFollowUp kind="planning" initialCents={budget.initialCents} usedCents={budget.planning.usedCents} undefinedBudgetCount={budget.undefinedBudgetCount} offline={offline} showInitial={false} />
+        <BudgetFollowUp kind="spending" initialCents={budget.initialCents} usedCents={budget.spending.usedCents} offline={offline} showInitial={false} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -49,7 +58,7 @@ export function TripSummary({ activities, expenses = [], trip, onOpenExpenses }:
             return <li key={item.category}><div className="flex items-center justify-between gap-3 text-sm"><span className="inline-flex min-w-0 items-center gap-2 text-[#415b77]"><span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] ${style.tile}`}><ExpenseCategoryIcon category={item.category} className="h-3.5 w-3.5" strokeWidth={1.6} /></span><span className="truncate">{item.category}</span></span><span className="shrink-0 font-semibold text-[#3b5f86]">{formatCurrency(item.totalCents)}</span></div><div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#eef2f7]"><div className="h-full rounded-full" style={{ width: `${share}%`, backgroundColor: style.bar }} /></div></li>;
           })}</ul>}</div>
         </div>
-        <p className="mt-4 text-xs leading-6 text-[#8194a7]">O orçamento previsto no cronograma e os gastos registrados são medidas diferentes: o cronograma pode não incluir hospedagem, combustível e outras despesas, por isso não calculamos saldo nem estouro entre eles.</p>
+        <p className="mt-4 text-xs leading-6 text-[#8194a7]">O cronograma mostra quanto do orçamento está comprometido pelo planejamento. A aba Gastos mostra quanto foi utilizado pelas despesas registradas. Ambos partem do mesmo orçamento inicial, mas não descontam valores um do outro.</p>
       </section>
 
       <div className="rounded-[24px] border border-[#e2e9f2] bg-white p-5 shadow-[0_3px_18px_#3b5f8603] sm:p-6"><div className="mb-5 flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#edf3fa] text-[#799abd]"><CalendarDays className="h-4 w-4" aria-hidden="true" /></span><div><h2 className="text-base font-semibold text-[#3b5f86]">Um dia de cada vez</h2><p className="mt-0.5 text-xs text-[#6e8194]">Atividades e orçamento previsto por dia</p></div></div>{groups.length === 0 ? <div className="rounded-2xl bg-[#f8fafc] px-5 py-8 text-center"><Heart className="mx-auto mb-3 h-5 w-5 text-[#ceb2c0]" strokeWidth={1.5} aria-hidden="true" /><p className="text-sm text-[#6e8194]">Ainda temos espaço para novas memórias.</p><p className="mt-1 text-xs text-[#6e8194]">Os dias aparecerão aqui quando adicionarem atividades.</p></div> : <div className="divide-y divide-[#edf1f6]">{groups.map((group) => {

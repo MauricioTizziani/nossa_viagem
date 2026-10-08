@@ -6,6 +6,8 @@ import type { Activity, Expense, ExpenseCategory, ExpenseFilters, Trip } from ".
 import { EXPENSE_CATEGORIES } from "../lib/types";
 import { formatCurrency, formatDateTime } from "../lib/domain";
 import { filterExpenses, formatCalendarDate, hasExpenseFilters, matchesExpenseFilters, summarizeExpenses, validateExpenseFilters } from "../lib/expenses";
+import { tripBudgetView } from "../lib/budget";
+import { BudgetFollowUp } from "./BudgetFollowUp";
 import { EXPENSES_MIGRATION } from "../lib/useTravelData";
 import { ExpenseCategoryBadge, ExpenseCategoryIcon, expenseCategoryStyle } from "./Icons";
 
@@ -19,6 +21,7 @@ interface ExpensesProps {
   onAdd: () => void;
   onEdit: (expense: Expense) => void;
   onDelete: (expense: Expense) => void;
+  onDefineBudget?: () => void;
 }
 
 const fieldClass = "h-11 w-full rounded-xl border border-[#e3e8ef] bg-white px-3 text-sm text-[#415b77] outline-none transition focus:border-[#5c7fa3] focus:ring-3 focus:ring-[#dcebfa]";
@@ -59,7 +62,7 @@ function EmptyExpenses({ filtered, ready, onAdd, onClear }: { filtered: boolean;
   );
 }
 
-export function Expenses({ expenses, activities, trip, online, ready, lastSaved, onAdd, onEdit, onDelete }: ExpensesProps) {
+export function Expenses({ expenses, activities, trip, online, ready, lastSaved, onAdd, onEdit, onDelete, onDefineBudget }: ExpensesProps) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<ExpenseCategory | "">("");
   const [from, setFrom] = useState("");
@@ -75,6 +78,7 @@ export function Expenses({ expenses, activities, trip, online, ready, lastSaved,
   const activityById = useMemo(() => new Map(activities.map((activity) => [activity.id, activity])), [activities]);
   const filtered = filterExpenses(expenses, applied);
   const total = useMemo(() => summarizeExpenses(expenses), [expenses]);
+  const budget = tripBudgetView(trip, activities, ready ? expenses : null);
   const subtotal = summarizeExpenses(filtered);
   const breakdown = hasFilters ? subtotal : total;
   const categoriesInUse = EXPENSE_CATEGORIES.map((item) => ({ category: item, ...breakdown.byCategory[item] })).filter((item) => item.count > 0).sort((a, b) => b.totalCents - a.totalCents || a.category.localeCompare(b.category));
@@ -100,8 +104,10 @@ export function Expenses({ expenses, activities, trip, online, ready, lastSaved,
 
       {!ready && <div className="notice notice-warm" role="status"><p>Falta aplicar a atualização de gastos no Supabase: <strong>{EXPENSES_MIGRATION}</strong>. O cronograma continua funcionando normalmente; os gastos ficam disponíveis assim que a migração for executada.</p></div>}
 
+      <BudgetFollowUp kind="spending" initialCents={budget.initialCents} usedCents={budget.spending.usedCents} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
+
       <div className={`grid gap-4 ${hasFilters ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
-        <div className="relative overflow-hidden rounded-[24px] border border-[#cbddee] bg-[#e7f0fa] px-6 py-6"><Wallet className="absolute -bottom-5 -right-4 h-28 w-28 rotate-12 text-[#d8e6f5]" strokeWidth={1.1} aria-hidden="true" /><span className="relative inline-flex items-center gap-2 text-xs font-semibold text-[#6183a5]"><Wallet className="h-4 w-4" aria-hidden="true" />Total gasto na viagem</span><p className="relative mt-4 text-[32px] font-semibold leading-none tracking-[-0.04em] text-[#3b5f86] sm:text-[36px]" data-testid="expenses-total">{formatCurrency(total.totalCents)}</p><p className="relative mt-3 text-xs text-[#617e9a]">Soma de todos os gastos registrados, dentro e fora do período da viagem</p></div>
+        <div className="relative overflow-hidden rounded-[24px] border border-[#cbddee] bg-[#e7f0fa] px-6 py-6"><Wallet className="absolute -bottom-5 -right-4 h-28 w-28 rotate-12 text-[#d8e6f5]" strokeWidth={1.1} aria-hidden="true" /><span className="relative inline-flex items-center gap-2 text-xs font-semibold text-[#6183a5]"><Wallet className="h-4 w-4" aria-hidden="true" />Total gasto na viagem</span><p className="relative mt-4 text-[32px] font-semibold leading-none tracking-[-0.04em] text-[#3b5f86] sm:text-[36px]" data-testid="expenses-total">{ready ? formatCurrency(total.totalCents) : "Indisponível"}</p><p className="relative mt-3 text-xs text-[#617e9a]">{ready ? "Soma de todos os gastos registrados, dentro e fora do período da viagem" : "O total não foi carregado, então o saldo do orçamento não foi calculado."}</p></div>
         <div className="rounded-[24px] border border-[#e2e9f2] bg-[#fffdf9] px-6 py-6"><span className="inline-flex items-center gap-2 text-xs font-semibold text-[#687e94]"><Receipt className="h-4 w-4" aria-hidden="true" />Gastos registrados</span><div className="mt-4 flex items-end gap-3"><span className="text-[36px] font-semibold leading-none tracking-[-0.04em] text-[#3b5f86]">{total.count}</span><span className="pb-0.5 text-sm text-[#657a8f]">{total.count === 1 ? "gasto" : "gastos"}</span></div><p className="mt-3 text-xs text-[#6e8194]">{total.count === 0 ? "Nenhuma despesa registrada até agora" : `${totalCategories} ${totalCategories === 1 ? "categoria" : "categorias"} em uso`}</p></div>
         {hasFilters && <div className="rounded-[24px] border border-[#ead8e0] bg-[#fdf6f9] px-6 py-6"><span className="inline-flex items-center gap-2 text-xs font-semibold text-[#95647a]"><SlidersHorizontal className="h-4 w-4" aria-hidden="true" />Subtotal dos filtros</span><p className="mt-4 text-[32px] font-semibold leading-none tracking-[-0.04em] text-[#3b5f86] sm:text-[36px]" data-testid="expenses-subtotal">{formatCurrency(subtotal.totalCents)}</p><p className="mt-3 text-xs text-[#8a6c7a]">{subtotal.count} de {total.count} {total.count === 1 ? "registro corresponde" : "registros correspondem"} aos filtros</p></div>}
       </div>

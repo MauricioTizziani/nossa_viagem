@@ -1,11 +1,13 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Activity, ActivityInput, Expense, ExpenseInput, Trip } from './types';
+import { coerceInitialBudgetCents } from './budget';
 import { clearLegacyInvitation, getSupabase, initializeSession, isConfigured, resetSessionInitialization } from './supabase';
 import { clearSnapshot, readOfflineSnapshot, saveSnapshot } from './storage';
 
-export const emptyTrip: Trip = { id: '', name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, version: 1 };
+export const emptyTrip: Trip = { id: '', name: 'Nossa Viagem', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, version: 1 };
 export const EXPENSES_MIGRATION = '202610080004_gastos.sql';
+export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''; }
 /** The expense table/RPCs come from migration 004; until it runs, the schedule keeps working. */
 function isMissingExpensesSchema(error: unknown): boolean {
@@ -18,6 +20,7 @@ export function friendlyError(error: unknown): string {
   if (message.includes('ACCESS_DENIED')) return 'Não foi possível abrir a viagem. Tente novamente para conectar este aparelho.';
   if (message.includes('SHARED_TRIP_NOT_CONFIGURED') || message.includes('open_shared_trip')) return 'Falta aplicar a atualização de acesso livre no Supabase: 202610080003_acesso_livre.sql.';
   if (message.includes('EXPENSES_MIGRATION_PENDING') || isMissingExpensesSchema(error)) return `Falta aplicar a atualização de gastos no Supabase: ${EXPENSES_MIGRATION}.`;
+  if (message.includes('BUDGET_MIGRATION_PENDING') || message.includes('INVALID_INITIAL_BUDGET') || (errorCode(error) === 'PGRST202' && /update_trip/.test(message) && /initial_budget|touch_budget/.test(message))) return message.includes('INVALID_INITIAL_BUDGET') ? 'Informe um orçamento inicial válido e não negativo.' : `Falta aplicar a atualização de orçamento inicial no Supabase: ${BUDGET_MIGRATION}.`;
   if (message.includes('EXPENSE_ACTIVITY_MISMATCH')) return 'A atividade escolhida não está mais disponível nesta viagem. Atualize os dados e escolha novamente.';
   if (message.includes('trip_expenses_category_check')) return `A categoria não foi aceita pelo banco. Execute novamente ${EXPENSES_MIGRATION} no SQL Editor do Supabase e tente de novo.`;
   if (message.includes('Failed to fetch') || message.includes('Network')) return 'Não conseguimos conectar agora. Seu formulário continua aqui; tente novamente com conexão.';
@@ -63,7 +66,7 @@ export function useTravelData() {
           if (!isMissingExpensesSchema(expensesResult.error)) throw expensesResult.error;
           expensesAvailable = false;
         } else expenseRecords = expensesResult.data as Expense[];
-        const currentTrip = { ...tripResult.data, destination: tripResult.data.destination ?? '' } as Trip;
+        const currentTrip = { ...tripResult.data, destination: tripResult.data.destination ?? '', initial_budget_cents: coerceInitialBudgetCents(tripResult.data.initial_budget_cents) } as Trip;
         const records = activitiesResult.data as Activity[];
         const timestamp = new Date().toISOString();
         saveSnapshot({ trip: currentTrip, activities: records, expenses: expenseRecords, userId, role: membership.role, syncedAt: timestamp });
@@ -170,11 +173,15 @@ export function useTravelData() {
     await refreshRef.current;
     await refresh();
   }
-  async function updateTrip(values: Omit<Trip, 'id' | 'version'>, expectedVersion: number) {
+  async function updateTrip(values: Omit<Trip, 'id' | 'version'>, expectedVersion: number, options: { touchBudget: boolean }) {
     requireWrite();
-    const result = await getSupabase().rpc('update_trip', { p_id: trip.id, p_expected_version: expectedVersion,
+    const base = { p_id: trip.id, p_expected_version: expectedVersion,
       p_name: values.name, p_destination: values.destination, p_start_date: values.start_date, p_end_date: values.end_date,
-      p_timezone: values.timezone, p_person_one: values.person_one, p_person_two: values.person_two });
+      p_timezone: values.timezone, p_person_one: values.person_one, p_person_two: values.person_two };
+    // Omitting the new arguments keeps older databases able to save the rest of the trip.
+    const args = options.touchBudget ? { ...base, p_initial_budget_cents: values.initial_budget_cents, p_touch_budget: true } : base;
+    const result = await getSupabase().rpc('update_trip', args);
+    if (result.error && options.touchBudget && (errorCode(result.error) === 'PGRST202' || String(result.error.message ?? '').includes('schema cache'))) throw new Error('BUDGET_MIGRATION_PENDING');
     if (result.error) throw result.error;
     await refreshRef.current;
     await refresh();
@@ -195,7 +202,7 @@ export function useTravelData() {
     requireWrite();
     const result = await getSupabase().from('trips').select('*').eq('id', trip.id).single();
     if (result.error) throw result.error;
-    return { ...result.data, destination: result.data.destination ?? '' } as Trip;
+    return { ...result.data, destination: result.data.destination ?? '', initial_budget_cents: coerceInitialBudgetCents(result.data.initial_budget_cents) } as Trip;
   }
   return { trip, activities, expenses, expensesReady, role, status, error, online, syncedAt, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip };
 }

@@ -1,4 +1,5 @@
 import type { Trip, Activity, Expense } from './types';
+import { coerceInitialBudgetCents } from './budget';
 export type Snapshot = { trip: Trip; activities: Activity[]; expenses: Expense[]; syncedAt: string; userId: string; role: 'owner' | 'member' };
 const project = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'unconfigured';
 const prefix = `nossa-viagem:v1:${project}:`;
@@ -18,11 +19,13 @@ export function readSnapshot(userId: string): Snapshot | null {
     if (!tripId) return null;
     const raw = localStorage.getItem(snapshotKey(userId, tripId));
     if (!raw) return null;
-    const snapshot = JSON.parse(raw) as Partial<Snapshot> & { expenses?: unknown };
+    const snapshot = JSON.parse(raw) as Partial<Snapshot> & { expenses?: unknown; trip?: Trip & { initial_budget_cents?: unknown } };
     if (snapshot.userId !== userId || snapshot.trip?.id !== tripId || !Array.isArray(snapshot.activities)) return null;
     // Snapshots saved before the expense control carry no expenses; they stay readable offline.
     if (snapshot.expenses !== undefined && !Array.isArray(snapshot.expenses)) return null;
-    return { ...snapshot, expenses: (snapshot.expenses ?? []) as Expense[] } as Snapshot;
+    // A missing budget stays unset. Zero remains zero. An invalid value cannot be shown as a balance.
+    const initial_budget_cents = coerceInitialBudgetCents(snapshot.trip.initial_budget_cents);
+    return { ...snapshot, trip: { ...snapshot.trip, destination: snapshot.trip.destination ?? '', initial_budget_cents }, expenses: (snapshot.expenses ?? []) as Expense[] } as Snapshot;
   } catch { return null; }
 }
 export function clearSnapshot(userId: string) {

@@ -135,7 +135,11 @@ try {
   assert.equal(await page.locator('.settings-form input[type="date"]').nth(0).inputValue(), '');
   assert.equal(await page.locator('.settings-form input[type="date"]').nth(1).inputValue(), '');
   assert.equal(await page.locator('.settings-form select').inputValue(), 'America/Sao_Paulo');
-  checks.push('Trip settings keep optional personal details empty and use the default trip timezone');
+  const initialBudget = page.getByLabel(/Orçamento inicial da viagem/);
+  assert.equal(await initialBudget.inputValue(), '', 'the initial budget is empty until someone types it');
+  assert.equal(await initialBudget.getAttribute('inputmode'), 'decimal');
+  await visible(page.getByRole('button', { name: 'Definir orçamento', exact: true }));
+  checks.push('Trip settings keep optional personal details empty, use the default trip timezone and do not prefill the initial budget');
 
   await page.locator('.desktop-nav').getByRole('button', { name: 'Cronograma', exact: true }).click();
   const add = page.getByRole('button', { name: 'Adicionar atividade', exact: true });

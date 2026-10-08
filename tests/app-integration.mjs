@@ -20,7 +20,7 @@ const photonQueries = [];
 const now = () => new Date().toISOString();
 const tripId = '60000000-0000-4000-8000-000000000001';
 const trip = { id: tripId, name: 'Nossa Viagem', destination: null, start_date: null, end_date: null,
-  timezone: 'America/Sao_Paulo', person_one: null, person_two: null, version: 1, created_at: now(), updated_at: now() };
+  timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, version: 1, created_at: now(), updated_at: now() };
 const users = new Map();
 const memberships = new Map();
 const activities = new Map();
@@ -163,9 +163,14 @@ const fixture = createServer(async (request, response) => {
     if (rpc === 'update_trip') {
       if (input.p_id !== tripId) { deny(response); return; }
       if (trip.version !== input.p_expected_version) { deny(response, 'VERSION_CONFLICT', '40001', 409); return; }
-      Object.assign(trip, { name: input.p_name, destination: input.p_destination?.trim() || null,
+      const next = { name: input.p_name, destination: input.p_destination?.trim() || null,
         start_date: input.p_start_date, end_date: input.p_end_date, timezone: input.p_timezone,
-        person_one: input.p_person_one, person_two: input.p_person_two, version: trip.version + 1, updated_at: now() });
+        person_one: input.p_person_one, person_two: input.p_person_two, version: trip.version + 1, updated_at: now() };
+      if (input.p_touch_budget) {
+        if (input.p_initial_budget_cents != null && !(Number.isInteger(input.p_initial_budget_cents) && input.p_initial_budget_cents >= 0)) { deny(response, 'INVALID_INITIAL_BUDGET', '22023', 400); return; }
+        next.initial_budget_cents = input.p_initial_budget_cents ?? null;
+      }
+      Object.assign(trip, next);
       respond(response, { ...trip }); return;
     }
     if (rpc === 'list_trip_invites' && membership.role === 'owner') { respond(response, invitations); return; }
@@ -441,10 +446,15 @@ try {
   await navigate(owner.page, 'Nossa viagem');
   await owner.page.getByLabel(/Nome da viagem/).fill('Viagem de teste');
   assert.equal(await owner.page.getByLabel('Destino', { exact: true }).inputValue(), '');
+  assert.equal(await owner.page.getByLabel(/Orçamento inicial da viagem/).inputValue(), '', 'an unset budget is empty, not zero');
+  await owner.page.getByLabel(/Orçamento inicial da viagem/).fill('2.000,00');
   await (await button(owner.page, 'Salvar nossa viagem')).click();
   await visibleText(owner.page, 'Sua viagem foi atualizada.');
   assert.equal(trip.destination, null);
   assert.equal(trip.name, 'Viagem de teste');
+  assert.equal(trip.initial_budget_cents, 200000);
+  assert.equal(expenses.size, 0, 'the initial budget never creates an expense');
+  assert.equal(activities.get(first.id).budget_cents, 1725, 'the initial budget never fills activity budgets');
   await navigate(owner.page, 'Cronograma');
   await refresh(member.page);
   await visibleText(member.page, 'Viagem de teste');

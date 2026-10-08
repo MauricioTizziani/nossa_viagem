@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, CalendarDays, Check, Clock3, Copy, Heart, List, MapPin, Pencil, Plus, Receipt, Route, Search, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
 import type { Activity, Expense, Trip } from "../lib/types";
 import { dateKey, directionsUrl, filterActivities, formatCurrency, formatDateTime, formatDay, groupActivities, mapsUrl, nextActivity, sortActivities, summarizeActivities } from "../lib/domain";
+import { tripBudgetView } from "../lib/budget";
+import { BudgetFollowUp } from "./BudgetFollowUp";
 import { compareActivityExpenses, describeActivitySpending } from "../lib/expenses";
 import { OsmAttribution } from "./OsmPlacePicker";
 import { CategoryBadge } from "./Icons";
@@ -18,6 +20,7 @@ interface ScheduleProps {
   onEdit: (activity: Activity) => void;
   onDuplicate: (activity: Activity) => void;
   onDelete: (activity: Activity) => void;
+  onDefineBudget?: () => void;
 }
 
 const fieldClass = "h-11 w-full rounded-xl border border-[#e3e8ef] bg-white px-3 text-sm text-[#415b77] outline-none transition focus:border-[#5c7fa3] focus:ring-3 focus:ring-[#dcebfa]";
@@ -77,7 +80,7 @@ function EmptySchedule({ filtered, onAdd, onClear }: { filtered: boolean; onAdd:
   );
 }
 
-export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdit, onDuplicate, onDelete }: ScheduleProps) {
+export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
   const [view, setView] = useState<"table" | "timeline">("table");
   const [day, setDay] = useState("");
   const [type, setType] = useState("");
@@ -96,6 +99,7 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
   const upcoming = nextActivity(sorted, now);
   const hasFilters = Boolean(day || type || search.trim());
   const { totalCents: subtotal, undefinedBudgetCount: undefinedBudgets } = summarizeActivities(filtered);
+  const budget = tripBudgetView(trip, activities, expenses);
   const clear = () => { setDay(""); setType(""); setSearch(""); };
   const actions = { online, onEdit, onDuplicate, onDelete };
 
@@ -109,6 +113,8 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
         </div>
         <button type="button" onClick={onAdd} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[15px] bg-[#3b5f86] px-5 text-sm font-semibold text-white shadow-[0_5px_15px_#3b5f8624] transition hover:bg-[#52779d] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#3b5f86]"><Plus className="h-4 w-4" aria-hidden="true" />Adicionar atividade</button>
       </div>
+
+      <BudgetFollowUp kind="planning" initialCents={budget.initialCents} usedCents={budget.planning.usedCents} undefinedBudgetCount={budget.undefinedBudgetCount} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
 
       <div className="rounded-[22px] border border-[#e3eaf2] bg-white p-4 shadow-[0_3px_18px_#3b5f8605] sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">

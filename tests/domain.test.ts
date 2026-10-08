@@ -9,7 +9,7 @@ import { sourceVersion, updateWorkerVersion } from "../scripts/update-sw-version
 import { budgetInputValue, dateKey, directionsUrl, filterActivities, formatCurrency, formatDateTime, groupActivities, isGoogleMapsUrl, isOutsideTripPeriod, isoToLocalDateTime, localDateTimeToIso, mapsUrl, nextActivity, parseBudgetCents, sortActivities, summarizeActivities, tripStatus, validateActivityInput, validateTripInput } from "../lib/domain";
 import { EMPTY_PLACE, type Activity, type Trip } from "../lib/types";
 
-const trip: Trip = { id: "trip", name: "Nossa Viagem", destination: "", start_date: null, end_date: null, timezone: "America/Sao_Paulo", person_one: null, person_two: null, version: 1 };
+const trip: Trip = { id: "trip", name: "Nossa Viagem", destination: "", start_date: null, end_date: null, timezone: "America/Sao_Paulo", person_one: null, person_two: null, initial_budget_cents: null, version: 1 };
 const activity = (id: string, starts_at: string, budget_cents: number | null, type: Activity["type"] = "Atividade", name = id): Activity => ({ id, trip_id: "trip", name, starts_at, budget_cents, type, version: 1, ...EMPTY_PLACE });
 
 test("currency uses exact integer cents, with zero distinct from undefined", () => {
