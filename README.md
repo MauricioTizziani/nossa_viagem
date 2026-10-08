@@ -71,12 +71,13 @@ Todas as leituras e gravações validam a sessão no Supabase. RLS isola viagens
 
 O cronograma preserva **Data e hora**, **Orçamento (R$)**, **Nome da atividade**, **Lugar** e **Tipo** (Refeição, Lazer ou Atividade). Lugares podem ser escolhidos no Photon/OpenStreetMap ou informados manualmente. Referências antigas são preservadas.
 
-Para cada viagem, B é seu orçamento inicial, P a soma dos orçamentos de suas atividades e G a soma de seus gastos:
+Para cada viagem, B é o orçamento inicial guardado como referência, G a soma dos gastos confirmados e P o que ainda está reservado nas atividades. A reserva de cada atividade é o máximo entre zero e o orçamento previsto menos os gastos com vínculo explícito. Um excesso em uma atividade não reduz a reserva de outra, e atividade com orçamento a definir não recebe um valor inventado.
 
-- Saldo do planejamento: **B − P**.
-- Saldo conforme gastos registrados: **B − G**.
+- Saldo disponível: **D = B − G**. O mesmo valor aparece em Gastos e como orçamento disponível do cronograma.
+- Saldo livre após o planejamento: **D − P**.
+- Projeção de custo: **G + P**, sem somar de novo um gasto já vinculado à atividade.
 
-Os dois acompanhamentos são independentes. Não se calcula B − P − G nem se somam saldos de viagens como dinheiro disponível. Valores são armazenados em centavos inteiros. Orçamentos antigos ausentes continuam ausentes, sem alertas de excesso, até que sejam definidos.
+O orçamento inicial não é decrementado e os saldos não são gravados à parte. Orçamento ausente não vira zero e não gera alerta de excesso. Orçamento zero é válido. Cada viagem é calculada sozinha; filtros e paginação não alteram esses indicadores.
 
 Gastos têm descrição, categoria, valor positivo, data de calendário, atividade opcional e observações. O pagamento pertence à viagem selecionada mesmo quando ocorreu fora do período. Excluir uma atividade mantém os gastos, removendo apenas o vínculo. Filtros alteram subtotais; os totais gerais sempre consideram todos os registros da viagem, inclusive além da primeira página do banco.
 

@@ -7,7 +7,7 @@ import { EXPENSE_CATEGORIES } from "../lib/types";
 import { formatCurrency, formatDateTime } from "../lib/domain";
 import { filterExpenses, formatCalendarDate, hasExpenseFilters, matchesExpenseFilters, summarizeExpenses, validateExpenseFilters } from "../lib/expenses";
 import { tripBudgetView } from "../lib/budget";
-import { BudgetFollowUp } from "./BudgetFollowUp";
+import { SpendingFollowUp } from "./BudgetFollowUp";
 import { EXPENSES_MIGRATION } from "../lib/useTravelData";
 import { ExpenseCategoryBadge, ExpenseCategoryIcon, expenseCategoryStyle } from "./Icons";
 
@@ -104,7 +104,7 @@ export function Expenses({ expenses, activities, trip, online, ready, lastSaved,
 
       {!ready && <div className="notice notice-warm" role="status"><p>Falta aplicar a atualização de gastos no Supabase: <strong>{EXPENSES_MIGRATION}</strong>. O cronograma continua funcionando normalmente; os gastos ficam disponíveis assim que a migração for executada.</p></div>}
 
-      <BudgetFollowUp kind="spending" initialCents={budget.initialCents} usedCents={budget.spending.usedCents} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
+      <SpendingFollowUp view={budget} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
 
       <div className={`grid gap-4 ${hasFilters ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
         <div className="relative overflow-hidden rounded-[24px] border border-[#BDE4E8] bg-[#EAF2F3] px-6 py-6"><Wallet className="absolute -bottom-5 -right-4 h-28 w-28 rotate-12 text-[#DAE9EA]" strokeWidth={1.1} aria-hidden="true" /><span className="relative inline-flex items-center gap-2 text-xs font-semibold text-[#50888D]"><Wallet className="h-4 w-4" aria-hidden="true" />Total gasto na viagem</span><p className="relative mt-4 text-[32px] font-semibold leading-none tracking-[-0.04em] text-[#125E67] sm:text-[36px]" data-testid="expenses-total">{ready ? formatCurrency(total.totalCents) : "Indisponível"}</p><p className="relative mt-3 text-xs text-[#548286]">{ready ? "Soma de todos os gastos registrados, dentro e fora do período da viagem" : "O total não foi carregado, então o saldo do orçamento não foi calculado."}</p></div>

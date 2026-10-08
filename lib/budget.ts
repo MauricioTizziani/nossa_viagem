@@ -3,41 +3,60 @@ import { summarizeExpenses } from "./expenses";
 import type { Activity, Expense } from "./types";
 
 /**
- * The schedule shows how much of the initial budget is committed by planning.
- * Expenses show how much was used by recorded spending.
- * Both start from the same initial budget and never subtract each other.
- * Balances are derived on read; the stored initial budget is never decremented.
+ * One derived balance for the whole trip. Nothing here is stored.
+ * B is the initial budget and stays a reference; expenses never decrement it.
+ * G is the sum of confirmed expenses. D = B - G is the available balance
+ * on Gastos and the budget the schedule is allowed to plan against.
+ * Each activity keeps its original budget. Pending reservation is
+ * max(budget - expenses linked to that activity, 0). P is the sum of those
+ * reservations, so an overrun on one activity cannot reduce another.
+ * Free balance after planning is D - P. Projected cost is G + P.
  */
 
 export const UNDEFINED_BUDGET_LABEL = "Orçamento inicial não definido";
-export const PLANNING_NOTE = "Este saldo considera apenas o planejamento do cronograma. Os gastos são acompanhados separadamente.";
-export const SPENDING_NOTE = "Este saldo considera apenas os gastos registrados. Os valores previstos no cronograma não são descontados aqui.";
+export const PLANNING_NOTE = "O planejamento utiliza o saldo que restou após os gastos. Despesas já vinculadas às atividades não são reservadas novamente.";
+export const SPENDING_NOTE = "Os gastos registrados também reduzem o valor disponível para planejar o cronograma.";
 export const OFFLINE_BUDGET_NOTE = "Valores da última sincronização, sem rascunhos locais. Eles podem estar desatualizados.";
 export const FILTER_BUDGET_NOTE = "Estes indicadores consideram toda a viagem. O subtotal dos filtros não muda esta situação.";
-export const INITIAL_BUDGET_HELP = "Quanto vocês pretendem disponibilizar para a viagem? Esse valor será usado para acompanhar o planejamento e os gastos separadamente.";
+export const INITIAL_BUDGET_HELP = "Quanto vocês pretendem disponibilizar para a viagem? Cada gasto reduz o saldo disponível para planejar o cronograma.";
+export const PROJECTION_NOTE = "Soma dos gastos registrados com o que ainda está reservado para as atividades. Uma despesa já vinculada não entra de novo.";
+export const ORIGINAL_PLAN_NOTE = "Total original dos orçamentos informados nas atividades. É diferente do valor ainda reservado.";
+export const UNKNOWN_TOTAL_LABEL = "Não foi possível carregar este total. O saldo não foi calculado.";
+export const FULLY_RESERVED_LABEL = "O saldo disponível está totalmente reservado para as atividades.";
+export const WITHIN_BUDGET_LABEL = "Dentro do orçamento";
+export const FULLY_USED_LABEL = "Orçamento totalmente utilizado";
 
-export type BudgetKind = "planning" | "spending";
 export type BudgetSituation = "undefined" | "within" | "exact" | "over" | "unknown";
-
-export interface BudgetSnapshot {
-  initialCents: number | null;
-  /** Null when the corresponding total could not be loaded. Never treated as zero. */
-  usedCents: number | null;
-  balanceCents: number | null;
-  /** Positive amount over the initial budget. Null unless the situation is over. */
-  excessCents: number | null;
-  situation: BudgetSituation;
-  /** Whole percent of the initial budget. Null when the budget is missing, zero, or the total is unknown. */
-  percent: number | null;
-}
 
 export interface TripBudgetView {
   initialCents: number | null;
-  planning: BudgetSnapshot;
-  spending: BudgetSnapshot;
-  plannedCents: number;
+  /** G. Null when expenses could not be loaded. Never treated as zero. */
   spentCents: number | null;
+  /** Sum of the original activity budgets that have a value. */
+  plannedCents: number;
+  /** P. Null when expenses are unknown, because coverage depends on linked spending. */
+  pendingCents: number | null;
+  /** D = B - G. Null when B is missing or G is unknown. */
+  availableCents: number | null;
+  /** D - P. Null when D or P is unknown. Negative values stay negative. */
+  freeCents: number | null;
+  /** G + P. Null when either total is unknown. Does not add linked expenses twice. */
+  projectedCents: number | null;
   undefinedBudgetCount: number;
+  spendingSituation: BudgetSituation;
+  /** Positive amount spent beyond B. Null unless spending is over. */
+  spendingExcessCents: number | null;
+  /** Whole percent of B used by G. Null when B is missing, zero, or G is unknown. */
+  spendingPercent: number | null;
+  /** Situation of the free balance. Distinct from the spending situation. */
+  planningSituation: BudgetSituation;
+  /**
+   * How far pending reservations exceed the available balance.
+   * Null unless that excess exists. Spending beyond B is a separate field.
+   */
+  planningShortfallCents: number | null;
+  /** Whole percent of D reserved by P. Null when D is missing or not positive, so zero never divides. */
+  reservedPercent: number | null;
 }
 
 /** Empty input stays unset. Zero is a valid budget. Negative values are rejected. */
@@ -86,36 +105,95 @@ export function formatSignedCurrency(cents: number): string {
   return cents < 0 ? `-${amount}` : amount;
 }
 
+export function initialBudgetText(cents: number | null): string {
+  return cents === null ? UNDEFINED_BUDGET_LABEL : formatCurrency(cents);
+}
+
+/** A missing total stays unavailable. A known total, including zero, is formatted. */
+export function totalText(cents: number | null): string {
+  return cents === null ? "Indisponível" : formatCurrency(cents);
+}
+
+/** A balance that cannot be derived stays uncalculated. Negatives keep the minus sign. */
+export function balanceText(cents: number | null): string {
+  return cents === null ? "Não calculado" : formatSignedCurrency(cents);
+}
+
 export function undefinedBudgetMessage(count: number): string | null {
   if (count <= 0) return null;
   const intro = count === 1 ? "Há 1 atividade com orçamento a definir." : `Há ${count} atividades com orçamento a definir.`;
-  return `${intro} O total planejado considera apenas os valores informados.`;
+  return `${intro} O planejamento está incompleto e os indicadores consideram apenas os valores conhecidos.`;
 }
 
-/** Planning balance is B - P. Spending balance is B - G. Neither formula includes the other total. */
-export function budgetSnapshot(initialCents: number | null, usedCents: number | null): BudgetSnapshot {
-  if (usedCents === null) return { initialCents, usedCents: null, balanceCents: null, excessCents: null, situation: "unknown", percent: null };
-  if (!Number.isSafeInteger(usedCents) || usedCents < 0) throw new Error("O total informado para o orçamento é inválido.");
-  if (initialCents === null) return { initialCents: null, usedCents, balanceCents: null, excessCents: null, situation: "undefined", percent: null };
-  if (!Number.isSafeInteger(initialCents) || initialCents < 0) throw new Error("O orçamento inicial informado é inválido.");
-  const balanceCents = initialCents - usedCents;
-  if (!Number.isSafeInteger(balanceCents)) throw new Error("O saldo do orçamento excede o limite de cálculo seguro.");
-  const situation: BudgetSituation = balanceCents > 0 ? "within" : balanceCents === 0 ? "exact" : "over";
-  const percent = initialCents === 0 ? null : Number((BigInt(usedCents) * 100n + BigInt(initialCents) / 2n) / BigInt(initialCents));
-  return { initialCents, usedCents, balanceCents, excessCents: situation === "over" ? -balanceCents : null, situation, percent };
-}
-
-export function situationLabel(kind: BudgetKind, snapshot: BudgetSnapshot): string {
-  if (snapshot.situation === "within") return "Dentro do orçamento";
-  if (snapshot.situation === "exact") return kind === "planning" ? "Orçamento totalmente planejado" : "Orçamento totalmente utilizado";
-  if (snapshot.situation === "over" && snapshot.excessCents !== null) {
-    const amount = formatCurrency(snapshot.excessCents);
-    return kind === "planning"
-      ? `O cronograma ultrapassa o orçamento inicial em ${amount}.`
-      : `Os gastos registrados ultrapassam o orçamento inicial em ${amount}.`;
+export function spendingStatusLabel(view: TripBudgetView): string {
+  if (view.spendingSituation === "within") return WITHIN_BUDGET_LABEL;
+  if (view.spendingSituation === "exact") return FULLY_USED_LABEL;
+  if (view.spendingSituation === "over" && view.spendingExcessCents !== null) {
+    return `Os gastos ultrapassaram o orçamento inicial em ${formatCurrency(view.spendingExcessCents)}.`;
   }
-  if (snapshot.situation === "unknown") return "Não foi possível carregar este total. O saldo não foi calculado.";
+  if (view.spendingSituation === "unknown") return UNKNOWN_TOTAL_LABEL;
   return UNDEFINED_BUDGET_LABEL;
+}
+
+export function planningShortfallLabel(shortfallCents: number): string {
+  return `As atividades ainda previstas ultrapassam o saldo disponível em ${formatCurrency(shortfallCents)}.`;
+}
+
+/** Calm schedule status. Callers hide it while a spending or planning alert is visible. */
+export function scheduleCalmLabel(view: TripBudgetView): string {
+  if (view.spendingSituation === "unknown" || view.planningSituation === "unknown") return UNKNOWN_TOTAL_LABEL;
+  if (view.spendingSituation === "undefined" || view.planningSituation === "undefined") return UNDEFINED_BUDGET_LABEL;
+  if (view.freeCents === 0 && (view.pendingCents ?? 0) > 0) return FULLY_RESERVED_LABEL;
+  if (view.freeCents === 0) return FULLY_USED_LABEL;
+  return WITHIN_BUDGET_LABEL;
+}
+
+function addCents(left: number, right: number): number {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) throw new Error("O saldo do orçamento excede o limite de cálculo seguro.");
+  return result;
+}
+
+function subtractCents(left: number, right: number): number {
+  const result = left - right;
+  if (!Number.isSafeInteger(result)) throw new Error("O saldo do orçamento excede o limite de cálculo seguro.");
+  return result;
+}
+
+function situationOf(balanceCents: number): BudgetSituation {
+  if (balanceCents > 0) return "within";
+  if (balanceCents === 0) return "exact";
+  return "over";
+}
+
+/** Whole percent, rounded half up. Caller must pass a positive total so zero never divides. */
+function percentOf(totalCents: number, partCents: number): number {
+  return Number((BigInt(partCents) * 100n + BigInt(totalCents) / 2n) / BigInt(totalCents));
+}
+
+/**
+ * What is still reserved for one activity.
+ * An undefined budget contributes nothing invented. Linked spending cannot push this below zero.
+ */
+export function pendingReservationCents(budgetCents: number | null, linkedSpentCents: number): number {
+  if (!Number.isSafeInteger(linkedSpentCents) || linkedSpentCents < 0) throw new Error("O total vinculado à atividade é inválido.");
+  if (budgetCents === null) return 0;
+  if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) throw new Error("O orçamento da atividade é inválido.");
+  return Math.max(budgetCents - linkedSpentCents, 0);
+}
+
+/** Sums only expenses whose activity_id is this activity. Name, category and date never create a link. */
+export function activityPendingCents(activity: Pick<Activity, "id" | "budget_cents">, expenses: Expense[]): number {
+  const linked = summarizeExpenses(expenses.filter((expense) => expense.activity_id === activity.id)).totalCents;
+  return pendingReservationCents(activity.budget_cents, linked);
+}
+
+function pendingTotal(activities: Activity[], expenses: Expense[]): number {
+  let pending = 0;
+  for (const activity of activities) {
+    pending = addCents(pending, activityPendingCents(activity, expenses));
+  }
+  return pending;
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -132,18 +210,75 @@ function uniqueById<T extends { id: string }>(items: T[]): T[] {
 /**
  * Totals always come from the complete trip records passed in.
  * Callers must not pass a filtered page: filters have their own subtotals.
- * A null expense list means the spending total is unknown, not zero.
+ * A null expense list means spending and pending coverage are unknown, not zero.
  */
 export function tripBudgetView(trip: { id?: string; initial_budget_cents: number | null }, activities: Activity[], expenses: Expense[] | null): TripBudgetView {
   const sameTrip = <T extends { trip_id: string }>(items: T[]) => (trip.id ? items.filter((item) => item.trip_id === trip.id) : items);
-  const planned = summarizeActivities(uniqueById(sameTrip(activities)));
-  const spentCents = expenses === null ? null : summarizeExpenses(uniqueById(sameTrip(expenses))).totalCents;
-  return {
-    initialCents: trip.initial_budget_cents,
-    planning: budgetSnapshot(trip.initial_budget_cents, planned.totalCents),
-    spending: budgetSnapshot(trip.initial_budget_cents, spentCents),
+  const tripActivities = uniqueById(sameTrip(activities));
+  const planned = summarizeActivities(tripActivities);
+  const initialCents = trip.initial_budget_cents;
+  if (initialCents !== null && (!Number.isSafeInteger(initialCents) || initialCents < 0)) throw new Error("O orçamento inicial informado é inválido.");
+
+  const base = {
+    initialCents,
     plannedCents: planned.totalCents,
-    spentCents,
     undefinedBudgetCount: planned.undefinedBudgetCount,
+  };
+
+  if (expenses === null) {
+    return {
+      ...base,
+      spentCents: null,
+      pendingCents: null,
+      availableCents: null,
+      freeCents: null,
+      projectedCents: null,
+      spendingSituation: "unknown",
+      spendingExcessCents: null,
+      spendingPercent: null,
+      planningSituation: "unknown",
+      planningShortfallCents: null,
+      reservedPercent: null,
+    };
+  }
+
+  const tripExpenses = uniqueById(sameTrip(expenses));
+  const spentCents = summarizeExpenses(tripExpenses).totalCents;
+  const pendingCents = pendingTotal(tripActivities, tripExpenses);
+  const projectedCents = addCents(spentCents, pendingCents);
+  if (initialCents === null) {
+    return {
+      ...base,
+      spentCents,
+      pendingCents,
+      availableCents: null,
+      freeCents: null,
+      projectedCents,
+      spendingSituation: "undefined",
+      spendingExcessCents: null,
+      spendingPercent: null,
+      planningSituation: "undefined",
+      planningShortfallCents: null,
+      reservedPercent: null,
+    };
+  }
+
+  const availableCents = subtractCents(initialCents, spentCents);
+  const freeCents = subtractCents(availableCents, pendingCents);
+  const spendingSituation = situationOf(availableCents);
+  const planningSituation = situationOf(freeCents);
+  return {
+    ...base,
+    spentCents,
+    pendingCents,
+    availableCents,
+    freeCents,
+    projectedCents,
+    spendingSituation,
+    spendingExcessCents: spendingSituation === "over" ? -availableCents : null,
+    spendingPercent: initialCents === 0 ? null : percentOf(initialCents, spentCents),
+    planningSituation,
+    planningShortfallCents: freeCents < 0 && pendingCents > 0 ? -freeCents : null,
+    reservedPercent: availableCents > 0 ? percentOf(availableCents, pendingCents) : null,
   };
 }

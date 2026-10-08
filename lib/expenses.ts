@@ -1,7 +1,7 @@
 import { DEFAULT_TIMEZONE, EXPENSE_CATEGORIES, type Activity, type ActivityExpenseComparison, type Expense, type ExpenseCategory, type ExpenseFilters, type ExpenseInput, type ExpenseSummary, type ExpenseTotals } from "./types";
 import { budgetInputValue, dateKey, formatCurrency, isValidDate, parseBudgetCents } from "./domain";
 
-/** Expenses are what was actually paid; schedule budgets are plans. Neither is ever added to the other. */
+/** Confirmed expenses reduce the trip balance. Only an explicit activity link reduces that activity's pending reservation. */
 export const MAX_EXPENSE_CENTS = 999_999_999_999;
 export const MAX_DESCRIPTION_LENGTH = 200;
 export const MAX_NOTES_LENGTH = 2000;

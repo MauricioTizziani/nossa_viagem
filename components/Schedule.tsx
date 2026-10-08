@@ -5,15 +5,17 @@ import { ArrowUpRight, CalendarDays, Check, Clock3, Copy, Heart, List, MapPin, P
 import type { Activity, Expense, Trip } from "../lib/types";
 import { dateKey, directionsUrl, filterActivities, formatCurrency, formatDateTime, formatDay, groupActivities, mapsUrl, nextActivity, sortActivities, summarizeActivities } from "../lib/domain";
 import { tripBudgetView } from "../lib/budget";
-import { BudgetFollowUp } from "./BudgetFollowUp";
+import { ScheduleBudget } from "./BudgetFollowUp";
 import { compareActivityExpenses, describeActivitySpending } from "../lib/expenses";
 import { OsmAttribution } from "./OsmPlacePicker";
 import { CategoryBadge } from "./Icons";
 
 interface ScheduleProps {
   activities: Activity[];
-  /** Registered expenses; only linked ones are compared with the planned budget. */
+  /** Registered expenses; only an explicit activity link reduces that activity's reservation. */
   expenses?: Expense[];
+  /** False while expenses are missing. Unknown totals stay uncalculated instead of becoming zero. */
+  expensesReady?: boolean;
   trip: Trip;
   online: boolean;
   onAdd: () => void;
@@ -51,7 +53,8 @@ function ActivityPlace({ activity, online }: { activity: Activity; online: boole
 }
 
 /* Complementary detail: linked expenses so far versus the plan. The five schedule columns stay untouched. */
-function ActivitySpending({ activity, expenses }: { activity: Activity; expenses: Expense[] }) {
+function ActivitySpending({ activity, expenses, ready }: { activity: Activity; expenses: Expense[]; ready: boolean }) {
+  if (!ready) return <span className="inline-flex max-w-full items-start gap-1 text-[11px] leading-5 text-[#95754a]"><Receipt className="mt-1 h-3 w-3 shrink-0" aria-hidden="true" /><span className="min-w-0 break-words">Gastos ainda não carregados</span></span>;
   const comparison = compareActivityExpenses(activity, expenses);
   const tone = comparison.count === 0 ? "text-[#71989B]" : comparison.differenceCents !== null && comparison.differenceCents > 0 ? "text-[#a0657a]" : "text-[#4D8489]";
   return <span className={`inline-flex max-w-full items-start gap-1 text-[11px] leading-5 ${tone}`}><Receipt className="mt-1 h-3 w-3 shrink-0" aria-hidden="true" /><span className="min-w-0 break-words">{describeActivitySpending(comparison)}</span></span>;
@@ -80,7 +83,7 @@ function EmptySchedule({ filtered, onAdd, onClear }: { filtered: boolean; onAdd:
   );
 }
 
-export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
+export function Schedule({ activities, expenses = [], expensesReady = true, trip, online, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
   const [view, setView] = useState<"table" | "timeline">("table");
   const [day, setDay] = useState("");
   const [type, setType] = useState("");
@@ -99,7 +102,7 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
   const upcoming = nextActivity(sorted, now);
   const hasFilters = Boolean(day || type || search.trim());
   const { totalCents: subtotal, undefinedBudgetCount: undefinedBudgets } = summarizeActivities(filtered);
-  const budget = tripBudgetView(trip, activities, expenses);
+  const budget = tripBudgetView(trip, activities, expensesReady ? expenses : null);
   const clear = () => { setDay(""); setType(""); setSearch(""); };
   const actions = { online, onEdit, onDuplicate, onDelete };
 
@@ -114,7 +117,7 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
         <button type="button" onClick={onAdd} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[15px] bg-[#28AEB9] px-5 text-sm font-semibold text-[#062E32] shadow-[0_5px_15px_#28AEB924] transition hover:bg-[#1F9EAA] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#125E67]"><Plus className="h-4 w-4" aria-hidden="true" />Adicionar atividade</button>
       </div>
 
-      <BudgetFollowUp kind="planning" initialCents={budget.initialCents} usedCents={budget.planning.usedCents} undefinedBudgetCount={budget.undefinedBudgetCount} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
+      <ScheduleBudget view={budget} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
 
       <div className="rounded-[22px] border border-[#E2EEEF] bg-white p-4 shadow-[0_3px_18px_#28AEB905] sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -129,7 +132,7 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-[#618386]" role="status"><strong className="font-semibold text-[#4F7A7D]">{filtered.length}</strong> {filtered.length === 1 ? "atividade" : "atividades"}{hasFilters ? " encontradas" : " planejadas"}{hasFilters && <span className="ml-2 border-l border-[#D4E9EB] pl-2">Subtotal dos filtros: <strong className="font-semibold text-[#125E67]">{formatCurrency(subtotal)}</strong>{undefinedBudgets > 0 && ` · ${undefinedBudgets} a definir`}</span>}</p>
+        <p className="text-xs text-[#618386]" role="status"><strong className="font-semibold text-[#4F7A7D]">{filtered.length}</strong> {filtered.length === 1 ? "atividade" : "atividades"}{hasFilters ? " encontradas" : " planejadas"}{hasFilters && <span className="ml-2 border-l border-[#D4E9EB] pl-2">Subtotal dos filtros (orçamentos originais): <strong className="font-semibold text-[#125E67]">{formatCurrency(subtotal)}</strong>{undefinedBudgets > 0 && ` · ${undefinedBudgets} a definir`}</span>}</p>
         <div className="hidden items-center gap-1 rounded-xl border border-[#E0ECED] bg-[#EEF5F6] p-1 lg:flex" aria-label="Visualização do cronograma">
           <button type="button" aria-pressed={view === "table"} onClick={() => setView("table")} className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition ${view === "table" ? "bg-white text-[#125E67] shadow-sm" : "text-[#7A9DA0] hover:text-[#125E67]"}`}><Table2 className="h-3.5 w-3.5" aria-hidden="true" />Tabela</button>
           <button type="button" aria-pressed={view === "timeline"} onClick={() => setView("timeline")} className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition ${view === "timeline" ? "bg-white text-[#125E67] shadow-sm" : "text-[#7A9DA0] hover:text-[#125E67]"}`}><List className="h-3.5 w-3.5" aria-hidden="true" />Linha do tempo</button>
@@ -139,12 +142,12 @@ export function Schedule({ activities, expenses = [], trip, online, onAdd, onEdi
       {filtered.length === 0 ? <EmptySchedule filtered={hasFilters} onAdd={onAdd} onClear={clear} /> : <>
         {view === "table" && <div className="hidden overflow-hidden rounded-[22px] border border-[#E2EDEE] bg-white shadow-[0_4px_22px_#28AEB905] lg:block"><table className="w-full table-fixed border-collapse text-left"><caption className="sr-only">Atividades da viagem, organizadas por dia no fuso {trip.timezone}</caption><colgroup><col className="w-[16%]" /><col className="w-[14%]" /><col className="w-[21%]" /><col className="w-[22%]" /><col className="w-[13%]" /><col className="w-[14%]" /></colgroup><thead><tr className="border-b border-[#E7F0F1] bg-[#FCFDFD] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#628689]"><th className="px-5 py-4" scope="col">Data e hora</th><th className="px-4 py-4" scope="col">Orçamento (R$)</th><th className="px-4 py-4" scope="col">Nome da atividade</th><th className="px-4 py-4" scope="col">Lugar</th><th className="px-3 py-4" scope="col">Tipo</th><th className="px-3 py-4" scope="col"><span className="sr-only">Ações</span></th></tr></thead>{groups.map((group) => <tbody key={group.date}><tr><th scope="rowgroup" colSpan={6} className="border-y border-[#E8F1F2] bg-[#F5F9FA] px-5 py-3 text-xs font-semibold capitalize tracking-wide text-[#558488]"><span className="inline-flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />{formatDay(group.date)}<span className="ml-1 text-[10px] font-normal normal-case text-[#638486]">{group.activities.length} {group.activities.length === 1 ? "plano" : "planos"}</span></span></th></tr>{group.activities.map((activity) => {
           const next = upcoming?.id === activity.id;
-          return <tr key={activity.id} className={`border-b border-[#EEF5F5] last:border-b-0 ${next ? "bg-[#F7FAFA]" : "hover:bg-[#FDFEFE]"}`}><td className={`px-5 py-5 align-top ${next ? "border-l-[3px] border-[#4BA2A9]" : "border-l-[3px] border-transparent"}`}><div className="text-xs font-medium leading-5 text-[#4D7679]">{formatDateTime(activity.starts_at, trip.timezone)}</div>{next && <span className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-[#4C9BA2]"><Clock3 className="h-3 w-3" aria-hidden="true" />Próxima atividade</span>}</td><td className="px-4 py-5 align-top text-sm font-semibold text-[#467074]">{formatCurrency(activity.budget_cents)}</td><td className="px-4 py-5 align-top"><div className="break-words text-sm font-semibold leading-6 text-[#125E67]">{activity.name}</div><div className="mt-1"><ActivitySpending activity={activity} expenses={expenses} /></div></td><td className="px-4 py-5 align-top"><ActivityPlace activity={activity} online={online} /></td><td className="px-3 py-5 align-top"><CategoryBadge type={activity.type} /></td><td className="px-1 py-3 align-top"><ActivityActions activity={activity} {...actions} /></td></tr>;
+          return <tr key={activity.id} className={`border-b border-[#EEF5F5] last:border-b-0 ${next ? "bg-[#F7FAFA]" : "hover:bg-[#FDFEFE]"}`}><td className={`px-5 py-5 align-top ${next ? "border-l-[3px] border-[#4BA2A9]" : "border-l-[3px] border-transparent"}`}><div className="text-xs font-medium leading-5 text-[#4D7679]">{formatDateTime(activity.starts_at, trip.timezone)}</div>{next && <span className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-[#4C9BA2]"><Clock3 className="h-3 w-3" aria-hidden="true" />Próxima atividade</span>}</td><td className="px-4 py-5 align-top text-sm font-semibold text-[#467074]">{formatCurrency(activity.budget_cents)}</td><td className="px-4 py-5 align-top"><div className="break-words text-sm font-semibold leading-6 text-[#125E67]">{activity.name}</div><div className="mt-1"><ActivitySpending activity={activity} expenses={expenses} ready={expensesReady} /></div></td><td className="px-4 py-5 align-top"><ActivityPlace activity={activity} online={online} /></td><td className="px-3 py-5 align-top"><CategoryBadge type={activity.type} /></td><td className="px-1 py-3 align-top"><ActivityActions activity={activity} {...actions} /></td></tr>;
         })}</tbody>)}</table></div>}
 
         <div className={`${view === "table" ? "lg:hidden" : ""} space-y-7`}>{groups.map((group) => <div key={group.date}><div className="mb-4 flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#DBEAEB] bg-[#EFF5F6] text-[#518E93]"><CalendarDays className="h-4 w-4" aria-hidden="true" /></span><h2 className="text-sm font-semibold capitalize text-[#4F7E82]">{formatDay(group.date)}</h2><span className="h-px flex-1 bg-[#DDEBEC]" /><span className="text-[11px] text-[#608588]">{group.activities.length} {group.activities.length === 1 ? "plano" : "planos"}</span></div><div className="space-y-3 sm:ml-4 sm:border-l sm:border-[#D0EAED] sm:pl-7">{group.activities.map((activity) => {
           const next = upcoming?.id === activity.id;
-          return <article key={activity.id} className={`relative rounded-[20px] border bg-white px-5 py-5 shadow-[0_3px_15px_#28AEB904] ${next ? "border-[#8CC8CD] ring-3 ring-[#28AEB933]" : "border-[#E1EDEE]"}`}><span className={`absolute -left-[33px] top-7 hidden h-2.5 w-2.5 rounded-full border-2 border-[#F8FBFB] sm:block ${next ? "bg-[#50ABB2]" : "bg-[#B2D9DC]"}`} /><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#689599]"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{formatDateTime(activity.starts_at, trip.timezone)}</span><span className="text-sm font-semibold text-[#46777B]">{formatCurrency(activity.budget_cents)}</span></div>{next && <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-[#F2F7F7] px-2 py-1 text-[10px] font-semibold text-[#4B9096]"><Check className="h-3 w-3" aria-hidden="true" />Nossa próxima atividade</span>}<h3 className="mb-3 break-words text-base font-semibold leading-6 text-[#125E67]">{activity.name}</h3><div className="mb-3 flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#87B3B6]" aria-hidden="true" /><ActivityPlace activity={activity} online={online} /></div><div className="mb-4"><ActivitySpending activity={activity} expenses={expenses} /></div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#EEF5F5] pt-3"><CategoryBadge type={activity.type} /><ActivityActions activity={activity} {...actions} /></div></article>;
+          return <article key={activity.id} className={`relative rounded-[20px] border bg-white px-5 py-5 shadow-[0_3px_15px_#28AEB904] ${next ? "border-[#8CC8CD] ring-3 ring-[#28AEB933]" : "border-[#E1EDEE]"}`}><span className={`absolute -left-[33px] top-7 hidden h-2.5 w-2.5 rounded-full border-2 border-[#F8FBFB] sm:block ${next ? "bg-[#50ABB2]" : "bg-[#B2D9DC]"}`} /><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#689599]"><Clock3 className="h-3.5 w-3.5" aria-hidden="true" />{formatDateTime(activity.starts_at, trip.timezone)}</span><span className="text-sm font-semibold text-[#46777B]">{formatCurrency(activity.budget_cents)}</span></div>{next && <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-[#F2F7F7] px-2 py-1 text-[10px] font-semibold text-[#4B9096]"><Check className="h-3 w-3" aria-hidden="true" />Nossa próxima atividade</span>}<h3 className="mb-3 break-words text-base font-semibold leading-6 text-[#125E67]">{activity.name}</h3><div className="mb-3 flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#87B3B6]" aria-hidden="true" /><ActivityPlace activity={activity} online={online} /></div><div className="mb-4"><ActivitySpending activity={activity} expenses={expenses} ready={expensesReady} /></div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#EEF5F5] pt-3"><CategoryBadge type={activity.type} /><ActivityActions activity={activity} {...actions} /></div></article>;
         })}</div></div>)}</div>
       </>}
       <p className="text-center text-[11px] leading-5 text-[#638486]">Horários no fuso da viagem: {trip.timezone}.</p>
