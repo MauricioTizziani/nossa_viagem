@@ -90,19 +90,19 @@ export default function PwaManager({ hasUnsavedChanges = false }: { hasUnsavedCh
 
   return (
     <div className="space-y-3">
-      {!installed && <button type="button" onClick={() => { void install(); }} className="inline-flex min-h-10 items-center gap-2 rounded-full border border-[#CEE5E7] bg-white/80 px-4 py-2 text-xs font-semibold text-[#125E67] transition hover:bg-[#E3EEEF] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#125E67]" aria-expanded={showInstructions}><span aria-hidden="true">↧</span> Instalar aplicativo</button>}
-      {showInstructions && <div className="max-w-lg rounded-2xl border border-[#E3EEEF] bg-white p-4 text-sm leading-relaxed text-[#476F72]">
+      {!installed && <button type="button" onClick={() => { void install(); }} className="inline-flex min-h-10 items-center gap-2 rounded-full border border-[#DCEAEC] bg-white/80 px-4 py-2 text-xs font-semibold text-[#125E67] transition hover:bg-[#DCEAEC] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#125E67]" aria-expanded={showInstructions}><span aria-hidden="true">↧</span> Instalar aplicativo</button>}
+      {showInstructions && <div className="max-w-lg rounded-2xl border border-[#DCEAEC] bg-white p-4 text-sm leading-relaxed text-[#4F7276]">
         <p className="font-semibold text-[#125E67]">Nossas Viagens sempre por perto</p>
         <p className="mt-2">No iPhone, abra no Safari, toque em Compartilhar e em “Adicionar à Tela de Início”. No Android ou computador, abra o menu do navegador e procure “Instalar aplicativo” ou “Adicionar à tela inicial”.</p>
         <p className="mt-2 text-xs">A instalação depende do navegador. Abra a viagem com internet antes de consultar o cronograma offline.</p>
         <button type="button" onClick={() => setShowInstructions(false)} className="mt-3 min-h-9 font-semibold text-[#125E67]">Entendi</button>
       </div>}
-      {waitingWorker && <div role="status" className="rounded-2xl border border-[#CEE5E7] bg-[#F3F8F8] p-4 text-sm text-[#125E67]">
+      {waitingWorker && <div role="status" className="rounded-2xl border border-[#DCEAEC] bg-[#EBF3F4] p-4 text-sm text-[#125E67]">
         <p className="font-semibold">Uma nova versão de Nossas Viagens está pronta.</p>
         <p className="mt-1 text-xs leading-relaxed">{hasUnsavedChanges ? "Salve ou feche seu formulário antes de atualizar. Suas alterações em andamento continuam aqui." : "Atualize para receber as melhorias. O aplicativo será reaberto."}</p>
         <button type="button" disabled={hasUnsavedChanges || updating} onClick={update} className="mt-3 min-h-10 rounded-full bg-[#28AEB9] px-4 py-2 text-xs font-semibold text-[#062E32] disabled:cursor-not-allowed disabled:opacity-50">{updating ? "Atualizando…" : "Atualizar agora"}</button>
       </div>}
-      {workerError && <p className="text-xs text-[#5F7F81]">A consulta offline ainda não está pronta. Reabra o aplicativo com internet para tentar novamente.</p>}
+      {workerError && <p className="text-xs text-[#4F7276]">A consulta offline ainda não está pronta. Reabra o aplicativo com internet para tentar novamente.</p>}
     </div>
   );
 }

@@ -27,7 +27,7 @@ const EXPENSE_ICONS: Record<ExpenseCategory, LucideIcon> = {
 };
 const EXPENSE_STYLES: Record<ExpenseCategory, { badge: string; tile: string; bar: string }> = {
   "Combustível": { badge: "border-[#eadac5] bg-[#fbf3e6] text-[#826141]", tile: "bg-[#fbf1e1] text-[#a3845f]", bar: "#d9b98a" },
-  "Hospedagem": { badge: "border-[#CCEAED] bg-[#F2F7F8] text-[#125E67]", tile: "bg-[#EFF5F6] text-[#4D8489]", bar: "#63B9C0" },
+  "Hospedagem": { badge: "border-[#CCEAED] bg-[#F2F7F8] text-[#125E67]", tile: "bg-[#EBF3F4] text-[#4F7276]", bar: "#63B9C0" },
   "Alimentação": { badge: "border-[#d7e6dc] bg-[#edf5ef] text-[#51755f]", tile: "bg-[#edf5ef] text-[#5f8470]", bar: "#9cc0a9" },
   "Transporte": { badge: "border-[#dadff0] bg-[#eef1f8] text-[#5c6890]", tile: "bg-[#eef1f8] text-[#66719a]", bar: "#a7b0d6" },
   "Passeios e lazer": { badge: "border-[#ead8e0] bg-[#faedf2] text-[#95647a]", tile: "bg-[#f9eaf0] text-[#ae8197]", bar: "#d7a9bd" },

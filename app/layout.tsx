@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from 'next';
+import localFont from 'next/font/local';
 import './globals.css';
 import './trips.css';
+
+const figtree = localFont({ src: './fonts/Figtree.ttf', variable: '--font-figtree', display: 'swap', weight: '300 900' });
 
 export const metadata: Metadata = {
   title: 'Nossas Viagens · Pequenos planos, grandes memórias',
@@ -12,5 +15,5 @@ export const metadata: Metadata = {
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#28AEB9', viewportFit: 'cover' };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="pt-BR"><body>{children}</body></html>;
+  return <html lang="pt-BR" className={figtree.variable}><body>{children}</body></html>;
 }

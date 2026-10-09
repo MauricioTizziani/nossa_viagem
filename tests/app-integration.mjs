@@ -450,7 +450,7 @@ try {
 
   await owner.page.getByLabel('Filtrar por tipo').selectOption('Refeição');
   assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste passeio', exact: true }).count(), 0);
-  await visibleText(owner.page, /Subtotal dos filtros:/);
+  await visibleText(owner.page, /Subtotal dos filtros \(orçamentos originais\):/);
   await (await button(owner.page, 'Limpar filtros')).click();
   await owner.page.getByLabel('Pesquisar atividade ou lugar').fill('parque');
   await visibleText(owner.page, 'Teste passeio');
