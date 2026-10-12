@@ -15,7 +15,8 @@ import { mkdir } from 'node:fs/promises';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const nextBin = resolve(root, 'node_modules/next/dist/bin/next');
 const fixtureOrigin = 'http://127.0.0.1:54321';
-const appOrigin = 'http://127.0.0.1:3100';
+const appPort = Number(process.env.NOSSA_VIAGEM_TEST_PORT || 3100);
+const appOrigin = `http://127.0.0.1:${appPort}`;
 const photonQueries = [];
 const now = () => new Date().toISOString();
 const tripId = '60000000-0000-4000-8000-000000000001';
@@ -41,8 +42,10 @@ const invitations = [
   { id: randomUUID(), scope: 'collection', target: collectionId, token: collectionGuestToken, role: 'member', max_uses: 1, use_count: 0, expires_at: new Date(Date.now()+86400000).toISOString(), revoked_at: null, created_at: now(), last_used_at: null, users: new Set() },
 ];
 const rpcCalls = [];
+const browserDiagnostics = [];
 const delayedReads = new Map();
 const delayedRpcs = new Map();
+const failedRpcs = new Map();
 let buildProcess;
 let appProcess;
 let browser;
@@ -146,6 +149,7 @@ const fixture = createServer(async (request, response) => {
     const rpc = url.pathname.split('/').at(-1);
     rpcCalls.push(rpc);
     if(delayedRpcs.has(rpc)) await new Promise(resolve=>setTimeout(resolve,delayedRpcs.get(rpc)));
+    if(failedRpcs.has(rpc)) { const failure=failedRpcs.get(rpc); failedRpcs.delete(rpc); deny(response,failure.message,failure.code??'XX000',failure.status??500); return; }
     if (rpc === 'open_shared_trip') { deny(response,'PRIVATE_ACCESS_REQUIRED'); return; }
     if (rpc === 'redeem_trip_invite' || rpc === 'redeem_collection_invite') {
       const scope=rpc==='redeem_trip_invite'?'trip':'collection';
@@ -194,12 +198,14 @@ const fixture = createServer(async (request, response) => {
     }
     if (rpc === 'save_activity') {
       if (!tripRole(user.id,input.p_trip_id)) { deny(response); return; }
+      if (!['Refeição','Lazer','Atividade'].includes(input.p_type)) { deny(response,'INVALID_ACTIVITY_TYPE','22023',400); return; }
       const previous = activities.get(input.p_id);
       if ((previous && (previous.trip_id!==input.p_trip_id || previous.version !== input.p_expected_version)) || (!previous && input.p_expected_version !== 0)) {
         deny(response, 'VERSION_CONFLICT', '40001', 409); return;
       }
+      const observation = input.p_observation?.trim() || null;
       const record = { id: input.p_id, trip_id: input.p_trip_id, starts_at: input.p_starts_at,
-        budget_cents: input.p_budget_cents, name: input.p_name.trim(), type: input.p_type,
+        budget_cents: input.p_budget_cents, name: input.p_name.trim(), type: input.p_type, observation,
         place_id: input.p_place_id, manual_place_name: input.p_manual_place_name,
         manual_place_address: input.p_manual_place_address, manual_place_url: input.p_manual_place_url,
         osm_place_id: input.p_osm_place_id, osm_place_name: input.p_osm_place_name, osm_place_address: input.p_osm_place_address,
@@ -282,13 +288,18 @@ async function waitServer() {
   throw new Error('O servidor isolado do aplicativo não ficou disponível.');
 }
 async function stop(process) {
-  if (!process || process.exitCode !== null) return;
+  if (!process) return;
   if (globalThis.process.platform === 'win32') {
     // The exact PID comes from a child spawned by this harness. Kill only its
     // tree, including build workers; the user's other Next servers are untouched.
-    const killer = spawn('taskkill', ['/PID', String(process.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    await Promise.race([once(killer, 'exit').catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3000))]);
-  } else process.kill();
+    if (process.exitCode === null) {
+      const killer = spawn('taskkill', ['/PID', String(process.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      await Promise.race([once(killer, 'exit').catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3000))]);
+    }
+    // Fall back to terminating the exact child when taskkill is unavailable
+    // or restricted by the local runner.
+    if (process.exitCode === null) { try { process.kill(); } catch { /* It may have exited during cleanup. */ } }
+  } else if (process.exitCode === null) process.kill();
   await Promise.race([once(process, 'exit'), new Promise((resolve) => setTimeout(resolve, 3000))]);
 }
 function cleanup() {
@@ -311,13 +322,14 @@ async function refresh(page) {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await new Promise((resolve) => setTimeout(resolve, 300));
 }
-async function newActivity(page, { name, date = '2030-04-10T09:30', budget = '', type = 'Lazer', manual = false, osm = false }) {
+async function newActivity(page, { name, date = '2030-04-10T09:30', budget = '', type = 'Lazer', observation = null, manual = false, osm = false }) {
   await (await button(page, 'Adicionar atividade')).first().click();
   const dialog = page.getByRole('dialog', { name: 'Um novo momento' });
   await dialog.getByLabel(/Data e hora/).fill(date);
   await dialog.getByLabel(/Orçamento \(R\$\)/).fill(budget);
   await dialog.getByLabel(/Nome da atividade/).fill(name);
   await dialog.getByLabel(/^Tipo/).selectOption(type);
+  if (observation !== null) await dialog.getByLabel('Observação', { exact: true }).fill(observation);
   if (manual) {
     await dialog.getByRole('button', { name: 'Informar manualmente', exact: true }).click();
     await dialog.getByLabel('Nome do local (opcional)').fill('Parque de teste');
@@ -391,6 +403,9 @@ async function context(options = {}) {
     else await route.abort('blockedbyclient');
   });
   const page = await context.newPage();
+  page.on('console', message => { if (message.type() === 'error') browserDiagnostics.push(`console: ${message.text()}`); });
+  page.on('pageerror', error => browserDiagnostics.push(`page: ${error.message}`));
+  page.on('requestfailed', request => browserDiagnostics.push(`request: ${request.url()} — ${request.failure()?.errorText ?? 'falhou'}`));
   page.on('dialog', (dialog) => dialog.accept());
   return { context, page };
 }
@@ -413,7 +428,7 @@ try {
   clearTimeout(buildTimeout);
   if (buildCode !== 0) throw new Error(`A compilação isolada falhou: ${appOutput}`);
   appOutput = '';
-  appProcess = child([nextBin, 'start', '--hostname', '127.0.0.1', '--port', '3100'], env);
+  appProcess = child([nextBin, 'start', '--hostname', '127.0.0.1', '--port', String(appPort)], env);
   await waitServer();
   browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE
     ? { executablePath: process.env.BROWSER_EXECUTABLE } : { channel: 'chrome' }) });
@@ -433,14 +448,18 @@ try {
   passed('O convite explícito da coleção abre Minhas viagens e preserva a viagem existente sem conceder acesso público.');
 
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
-  await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', osm: true });
-  assert.equal(activities.size, 2);
+  const observation = 'Reservar uma mesa perto da janela.\n\nChegar 15 minutos antes.';
+  await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', observation, osm: true });
+  await newActivity(owner.page, { name: 'Teste refeição sem observação', date: '2030-04-10T13:30', type: 'Refeição' });
+  assert.equal(activities.size, 3);
   const first = [...activities.values()].find((activity) => activity.name === 'Teste passeio');
   assert.equal(first.budget_cents, 0);
   assert.equal(first.starts_at, '2030-04-10T12:30:00.000Z');
   assert.equal(first.place_id, null);
   assert.equal([...activities.values()].find((activity) => activity.name === 'Teste almoço').budget_cents, null);
   const osmActivity = [...activities.values()].find(activity => activity.name === 'Teste almoço');
+  assert.equal(osmActivity.type, 'Refeição');
+  assert.equal(osmActivity.observation, observation);
   assert.equal(osmActivity.osm_place_id, 'W/372720167');
   assert.equal(osmActivity.manual_place_name, null);
   assert.equal(osmActivity.osm_longitude, -43.1794045);
@@ -450,6 +469,11 @@ try {
 
   await owner.page.getByLabel('Filtrar por tipo').selectOption('Refeição');
   assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste passeio', exact: true }).count(), 0);
+  assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste almoço', exact: true }).count(), 1);
+  assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste refeição sem observação', exact: true }).count(), 1);
+  assert.equal(await owner.page.getByRole('button', { name: 'Ver observação', exact: true }).count(), 1);
+  await owner.page.getByRole('button', { name: 'Ver observação', exact: true }).click();
+  await visibleText(owner.page, /Reservar uma mesa perto da janela\.[\s\S]*Chegar 15 minutos antes\./);
   await visibleText(owner.page, /Subtotal dos filtros \(orçamentos originais\):/);
   await (await button(owner.page, 'Limpar filtros')).click();
   await owner.page.getByLabel('Pesquisar atividade ou lugar').fill('parque');
@@ -458,6 +482,62 @@ try {
   await (await button(owner.page, 'Limpar filtros')).click();
   passed('Filtros de categoria e texto do lugar exibem somente os registros correspondentes.');
 
+  const lunchActivity = [...activities.values()].find(activity => activity.name === 'Teste almoço');
+  await (await button(owner.page, 'Editar Teste almoço')).click();
+  let lunchEdit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
+  assert.equal(await lunchEdit.getByLabel('Observação', { exact: true }).inputValue(), observation);
+  await lunchEdit.getByLabel(/^Tipo/).selectOption('Lazer');
+  await (await button(lunchEdit, 'Salvar atividade')).click();
+  await lunchEdit.waitFor({ state: 'hidden' });
+  assert.equal(activities.get(lunchActivity.id).type, 'Lazer');
+  assert.equal(activities.get(lunchActivity.id).observation, observation);
+
+  await (await button(owner.page, 'Editar Teste almoço')).click();
+  lunchEdit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
+  await lunchEdit.getByLabel(/^Tipo/).selectOption('Refeição');
+  await lunchEdit.getByLabel('Observação', { exact: true }).fill(' \n  ');
+  await (await button(lunchEdit, 'Salvar atividade')).click();
+  await lunchEdit.waitFor({ state: 'hidden' });
+  assert.equal(activities.get(lunchActivity.id).type, 'Refeição');
+  assert.equal(activities.get(lunchActivity.id).observation, null);
+  passed('Refeição passa pela validação e gravação nos dois sentidos; editar também atualiza e remove observações.');
+
+  failedRpcs.set('save_activity', { message: 'Falha temporária no banco de teste.' });
+  await (await button(owner.page, 'Adicionar atividade')).first().click();
+  const retryForm = owner.page.getByRole('dialog', { name: 'Um novo momento' });
+  await retryForm.getByLabel(/Data e hora/).fill('2030-04-11T10:00');
+  await retryForm.getByLabel(/Orçamento \(R\$\)/).fill('');
+  await retryForm.getByLabel(/Nome da atividade/).fill('Refeição com nova tentativa');
+  await retryForm.getByLabel(/^Tipo/).selectOption('Refeição');
+  await retryForm.getByLabel('Observação', { exact: true }).fill('Manter no formulário durante a falha.');
+  await (await button(retryForm, 'Salvar atividade')).click();
+  await visibleText(retryForm, /Não foi possível concluir/);
+  assert.equal(await retryForm.getByLabel(/Nome da atividade/).inputValue(), 'Refeição com nova tentativa');
+  assert.equal(await retryForm.getByLabel('Observação', { exact: true }).inputValue(), 'Manter no formulário durante a falha.');
+  await (await button(retryForm, 'Salvar atividade')).click();
+  await retryForm.waitFor({ state: 'hidden' });
+  const retriedMeal = [...activities.values()].find(activity => activity.name === 'Refeição com nova tentativa');
+  assert.equal(retriedMeal.type, 'Refeição');
+  assert.equal(retriedMeal.observation, 'Manter no formulário durante a falha.');
+  passed('Falha simulada mantém nome, tipo e observação no formulário e permite nova tentativa.');
+
+  const savedLazer = { ...activities.get(first.id) };
+  await (await button(owner.page, 'Editar Teste passeio')).click();
+  let typeEdit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
+  await typeEdit.getByLabel(/^Tipo/).selectOption('Refeição');
+  await (await button(typeEdit, 'Salvar atividade')).click();
+  await typeEdit.waitFor({ state: 'hidden' });
+  const savedMeal = activities.get(first.id);
+  assert.equal(savedMeal.type, 'Refeição');
+  for (const field of ['name', 'starts_at', 'budget_cents', 'place_id', 'manual_place_name', 'manual_place_address', 'manual_place_url', 'observation']) assert.equal(savedMeal[field], savedLazer[field], `${field} is unchanged when only the type changes`);
+  await (await button(owner.page, 'Editar Teste passeio')).click();
+  typeEdit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
+  await typeEdit.getByLabel(/^Tipo/).selectOption('Lazer');
+  await (await button(typeEdit, 'Salvar atividade')).click();
+  await typeEdit.waitFor({ state: 'hidden' });
+  assert.equal(activities.get(first.id).type, 'Lazer');
+  passed('Reprodução controlada usa os mesmos campos já salvos em Lazer e altera somente o tipo para Refeição.');
+
   await (await button(owner.page, 'Editar Teste passeio')).click();
   let edit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
   await edit.getByLabel(/Nome da atividade/).fill('Teste passeio revisado');
@@ -465,17 +545,17 @@ try {
   await edit.getByLabel(/Data e hora/).fill('2030-04-10T10:30');
   await edit.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
   await edit.waitFor({ state: 'hidden' });
-  assert.equal(activities.get(first.id).version, 2);
+  assert.equal(activities.get(first.id).version, 4);
   assert.equal(activities.get(first.id).budget_cents, 1505);
   await (await button(owner.page, 'Duplicar Teste passeio revisado')).click();
   const duplicate = owner.page.getByRole('dialog', { name: 'Mais um momento parecido' });
-  assert.equal(activities.size, 2);
+  assert.equal(activities.size, 4);
   assert.equal(await duplicate.getByLabel(/Nome da atividade/).inputValue(), 'Teste passeio revisado');
   await duplicate.getByLabel(/Nome da atividade/).fill('Teste passeio duplicado');
   await duplicate.getByLabel(/Data e hora/).fill('2030-04-11T10:30');
   await duplicate.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
   await duplicate.waitFor({ state: 'hidden' });
-  assert.equal(activities.size, 3);
+  assert.equal(activities.size, 5);
   await owner.page.getByLabel('Filtrar por dia').selectOption('2030-04-11');
   await visibleText(owner.page, 'Teste passeio duplicado');
   assert.equal(await owner.page.getByRole('button', { name: 'Editar Teste passeio revisado', exact: true }).count(), 0);
@@ -489,12 +569,18 @@ try {
   await member.page.goto(`${appOrigin}/#convite=${memberToken}`);
   await member.page.getByRole('button', { name: 'Editar Teste passeio revisado', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
   await visibleText(member.page, '10/04/2030 10:30');
+  assert.equal(await member.page.getByRole('button', { name: 'Ver observação', exact: true }).count(), 1);
+  await member.page.getByRole('button', { name: 'Ver observação', exact: true }).click();
+  await visibleText(member.page, 'Manter no formulário durante a falha.');
   assert.equal(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await (await button(owner.page, 'Editar Teste passeio revisado')).click();
   edit = owner.page.getByRole('dialog', { name: 'Editar atividade' });
   await edit.getByLabel(/Nome da atividade/).fill('Tentativa antiga');
   await (await button(member.page, 'Editar Teste passeio revisado')).click();
   let mobileEdit = member.page.getByRole('dialog', { name: 'Editar atividade' });
+  const mobileObservation = mobileEdit.getByLabel('Observação', { exact: true });
+  const mobileObservationBounds = await mobileObservation.boundingBox();
+  assert.ok(mobileObservationBounds && mobileObservationBounds.x >= 0 && mobileObservationBounds.x + mobileObservationBounds.width <= 360, 'the observation field fits the 360px form');
   await mobileEdit.getByLabel(/Nome da atividade/).fill('Teste compartilhado');
   await mobileEdit.getByLabel(/Orçamento \(R\$\)/).fill('17,25');
   await mobileEdit.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
@@ -517,10 +603,10 @@ try {
 
   await (await button(owner.page, 'Excluir Teste passeio duplicado')).click();
   const deletion = owner.page.getByRole('dialog', { name: 'Excluir este momento?' });
-  assert.equal(activities.size, 3);
+  assert.equal(activities.size, 5);
   await deletion.getByRole('button', { name: 'Excluir atividade', exact: true }).click();
   await deletion.waitFor({ state: 'hidden' });
-  assert.equal(activities.size, 2);
+  assert.equal(activities.size, 4);
   assert.ok(![...activities.values()].some((activity) => activity.name === 'Teste passeio duplicado'));
   await navigate(owner.page, 'Detalhes');
   await owner.page.getByLabel(/Nome da viagem/).fill('Viagem de teste');
@@ -546,7 +632,7 @@ try {
   await newExpense(owner.page, { description: 'Teste Airbnb', amount: '600', category: 'Hospedagem', date: '2030-03-01', notes: 'Pago antecipadamente' });
   await newExpense(owner.page, { description: 'Teste almoço de domingo', amount: '80,00', category: 'Alimentação', date: '2030-04-10' });
   assert.equal(expenses.size, 3);
-  assert.equal(activities.size, 2, 'registering expenses never creates schedule activities');
+  assert.equal(activities.size, 4, 'registering expenses never creates schedule activities');
   const fuel = [...expenses.values()].find((expense) => expense.description === 'Teste gasolina');
   const lunch = [...expenses.values()].find((expense) => expense.description === 'Teste almoço de domingo');
   assert.equal(fuel.amount_cents, 20000);
@@ -563,7 +649,7 @@ try {
 
   await navigate(owner.page, 'Cronograma');
   await newActivity(owner.page, { name: 'Teste piquenique', date: '2030-04-10T13:00', type: 'Refeição' });
-  assert.equal(activities.size, 3);
+  assert.equal(activities.size, 5);
   const picnic = [...activities.values()].find((activity) => activity.name === 'Teste piquenique');
   assert.equal(picnic.budget_cents, null);
   await navigate(owner.page, 'Gastos');
@@ -668,7 +754,7 @@ try {
   await visibleText(owner.page, /Há 1 gasto vinculado a esta atividade/);
   await activityDeletion.getByRole('button', { name: 'Excluir atividade', exact: true }).click();
   await activityDeletion.waitFor({ state: 'hidden' });
-  assert.equal(activities.size, 2);
+  assert.equal(activities.size, 4);
   assert.equal(expenses.size, 4, 'deleting an activity never deletes expenses');
   assert.equal(expenses.get(lunch.id).activity_id, null, 'only the link is removed');
   await navigate(owner.page, 'Gastos');
@@ -764,7 +850,7 @@ try {
   assert.equal(tripB.initial_budget_cents,0);
   assert.equal(trips.size,2);
   assert.equal(rpcCalls.filter(call=>call==='create_private_trip').length,createsBefore+1);
-  assert.equal(activities.size,2);
+  assert.equal(activities.size,4);
   assert.equal(expenses.size,4);
   assert.equal(trip.initial_budget_cents,200000);
   assert.equal(await owner.page.getByRole('button',{ name:'Editar Teste conflito resolvido',exact:true }).count(),0);
@@ -960,6 +1046,9 @@ try {
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
 } catch (error) {
   console.error(error instanceof Error ? error.stack : 'Falha no teste de navegador.');
+  console.error(`Chamadas à fixture: ${rpcCalls.join(', ') || '(nenhuma)'}`);
+  if (browserDiagnostics.length) console.error(`Diagnóstico do navegador: ${browserDiagnostics.slice(-12).join(' | ')}`);
+  if (appOutput) console.error(`Saída recente do servidor: ${appOutput.slice(-1200)}`);
   for(const current of browser?.contexts()??[]) for(const page of current.pages()) {
     console.error(`Tela de teste: ${page.url().replace(/#[^#]*/, '')}`);
     console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-4000).replace(/[0-9a-f]{64}/g,'[convite omitido]'));

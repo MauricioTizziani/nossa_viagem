@@ -5,7 +5,7 @@ import { amountInputValue, compareActivityExpenses, describeActivitySpending, ex
 import { EMPTY_PLACE, type Activity, type Expense, type ExpenseCategory } from "../lib/types";
 
 const expense = (id: string, amount_cents: number, category: ExpenseCategory, expense_date: string, extra: Partial<Expense> = {}): Expense => ({ id, trip_id: "trip", description: id, category, amount_cents, expense_date, activity_id: null, notes: null, version: 1, created_at: "2026-10-08T12:00:00.000Z", ...extra });
-const activity = (id: string, budget_cents: number | null): Activity => ({ id, trip_id: "trip", name: id, starts_at: "2026-10-10T15:00:00Z", budget_cents, type: "Refeição", version: 1, ...EMPTY_PLACE });
+const activity = (id: string, budget_cents: number | null): Activity => ({ id, trip_id: "trip", name: id, starts_at: "2026-10-10T15:00:00Z", budget_cents, type: "Refeição", observation: null, version: 1, ...EMPTY_PLACE });
 // Test-only examples; nothing here is inserted into a real trip.
 const gasolina = expense("gasolina", 20000, "Combustível", "2026-10-09", { description: "Gasolina — viagem de ida", notes: "Abastecimento antes de sair" });
 const airbnb = expense("airbnb", 60000, "Hospedagem", "2026-09-20", { description: "Airbnb — hospedagem", notes: "Pago antecipadamente" });

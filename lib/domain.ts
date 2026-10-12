@@ -130,7 +130,7 @@ export function filterActivities(activities: Activity[], filters: ActivityFilter
     if (filters.type && filters.type !== "all" && activity.type !== filters.type) return false;
     if (!search) return true;
     const display = activity.place_id ? places[activity.place_id] : null;
-    return searchable([activity.name, activity.osm_place_name, activity.osm_place_address, activity.manual_place_name, activity.manual_place_address, display?.name, display?.address].filter(Boolean).join(" ")).includes(search);
+    return searchable([activity.name, activity.observation, activity.osm_place_name, activity.osm_place_address, activity.manual_place_name, activity.manual_place_address, display?.name, display?.address].filter(Boolean).join(" ")).includes(search);
   });
 }
 
@@ -221,6 +221,7 @@ export function directionsUrl(place: PlaceValue, display?: PlaceDisplay | null):
 
 export function validateActivityInput(input: ActivityInput): ActivityInput {
   const manualUrl = input.manual_place_url?.trim() || null;
+  const observation = input.observation?.trim() || null;
   if (!input.name.trim()) throw new Error("Informe o nome da atividade.");
   if (input.name.trim().length > 160) throw new Error("O nome da atividade deve ter até 160 caracteres.");
   if (!ACTIVITY_TYPES.includes(input.type)) throw new Error("Escolha Refeição, Lazer ou Atividade.");
@@ -237,7 +238,7 @@ export function validateActivityInput(input: ActivityInput): ActivityInput {
   if ((input.manual_place_name?.trim().length ?? 0) > 240) throw new Error("O nome do local deve ter até 240 caracteres.");
   if ((input.manual_place_address?.trim().length ?? 0) > 1000) throw new Error("O endereço deve ter até 1000 caracteres.");
   if ((input.manual_place_url?.trim().length ?? 0) > 2048) throw new Error("O link do Maps deve ter até 2048 caracteres.");
-  return { ...input, name: input.name.trim(), manual_place_name: input.manual_place_name?.trim() || null, manual_place_address: input.manual_place_address?.trim() || null, manual_place_url: manualUrl ? new URL(manualUrl).toString() : null,
+  return { ...input, name: input.name.trim(), observation, manual_place_name: input.manual_place_name?.trim() || null, manual_place_address: input.manual_place_address?.trim() || null, manual_place_url: manualUrl ? new URL(manualUrl).toString() : null,
     osm_place_id: input.osm_place_id ?? null, osm_place_name: input.osm_place_name?.trim() || null, osm_place_address: input.osm_place_address?.trim() || null, osm_latitude: input.osm_latitude ?? null, osm_longitude: input.osm_longitude ?? null };
 }
 

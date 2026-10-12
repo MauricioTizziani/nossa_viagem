@@ -79,6 +79,7 @@ export interface ActivityInput extends PlaceValue {
   budget_cents: number | null;
   name: string;
   type: ActivityType;
+  observation: string | null;
 }
 
 export interface Activity extends ActivityInput {

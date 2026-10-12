@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { clearSnapshot, readOfflineSnapshot, readOfflineSnapshots, readSnapshot, saveSnapshot, saveTripsSnapshot, readTripsSnapshot, pruneUnauthorizedSnapshots, rememberedTripId, type Snapshot } from '../lib/storage';
+import { EMPTY_PLACE, type Activity } from '../lib/types';
 class MemoryStorage {
   private items = new Map<string, string>();
   getItem(key: string) { return this.items.get(key) ?? null; }
@@ -46,6 +47,20 @@ test('expenses are kept in the same private snapshot and older snapshots without
   storage.setItem(key, JSON.stringify(legacy));
   assert.equal(readSnapshot('session-c'), null);
   clearSnapshot('session-c');
+});
+test('offline snapshots preserve observations and normalize older activity rows without the new field', () => {
+  localStorage.clear();
+  const activity: Activity = { id: 'activity', trip_id: 'trip-observation', name: 'Almoço', starts_at: '2026-10-10T15:00:00Z', budget_cents: null, type: 'Refeição', observation: 'Reservar mesa.\nChegar cedo.', version: 1, ...EMPTY_PLACE };
+  saveSnapshot({ ...snapshot('session-observation', 'trip-observation'), activities: [activity] });
+  assert.equal(readSnapshot('session-observation')?.activities[0].observation, activity.observation);
+
+  const storage = globalThis.localStorage as unknown as MemoryStorage;
+  const key = storage.keys().find(item => item.endsWith(':session-observation:trip-observation'))!;
+  const previous = JSON.parse(storage.getItem(key)!);
+  delete previous.activities[0].observation;
+  storage.setItem(key, JSON.stringify(previous));
+  assert.equal(readSnapshot('session-observation')?.activities[0].observation, null);
+  clearSnapshot('session-observation');
 });
 test('an older snapshot without an initial budget stays unset, while zero remains zero', () => {
   localStorage.clear();

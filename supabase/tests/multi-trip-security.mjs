@@ -32,13 +32,14 @@ async function create({ id = secondTrip, collection = collectionId, name = 'Outr
   return row('select * from public.create_private_trip($1,$2,$3,$4,$5,$6,$7,null,null,$8)',
     [id, collection, name, destination, start, end, timezone, budget]);
 }
-async function saveActivity(trip, id, budget = 10000) {
-  return row("select * from public.save_activity($1,$2,0,'2026-10-10T15:00:00Z',$3,'Passeio','Lazer',null,null,null,null,null,null,null,null,null)", [trip, id, budget]);
+async function saveActivity(trip, id, budget = 10000, type = 'Lazer', observation = null, version = 0) {
+  return row("select * from public.save_activity($1,$2,$3,'2026-10-10T15:00:00Z',$4,'Passeio',$5,null,null,null,null,null,null,null,null,null,$6)", [trip, id, version, budget, type, observation]);
 }
 async function spend(trip, id, amount = 5000, activity = null) {
   return row("select * from public.save_expense($1,$2,0,'Pagamento antecipado','Outros',$3,'2020-01-01',$4,null)", [trip,id,amount,activity]);
 }
 const migrationUrl = new URL('../migrations/202610080006_multiplas_viagens.sql', import.meta.url);
+const activityObservationMigrationUrl = new URL('../migrations/202610120001_observacao_atividade.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -58,6 +59,7 @@ before(async () => {
   await db.exec(`insert into public.trip_expenses(id,trip_id,description,category,amount_cents,expense_date,activity_id)
     values('${legacyExpense}','${legacyTrip}','Registro preservado','Outros',8000,'2020-01-01','${legacyActivity}');`);
   await db.exec(await readFile(migrationUrl,'utf8'));
+  await db.exec(await readFile(activityObservationMigrationUrl,'utf8'));
   collectionId = (await row('select collection_id from public.trips where id=$1',[legacyTrip])).collection_id;
 });
 after(async () => { await db.close(); });
@@ -70,6 +72,7 @@ test('incremental migration preserves IDs, data, budgets and original authorizat
   assert.equal((await row('select collection_id from public.trips where id=$1',[legacyTrip])).collection_id,collectionId);
   assert.equal((await row('select initial_budget_cents from public.trips where id=$1',[legacyTrip])).initial_budget_cents,null);
   assert.equal(Number((await row('select budget_cents from public.activities where id=$1',[legacyActivity])).budget_cents),12000);
+  assert.equal((await row('select observation from public.activities where id=$1',[legacyActivity])).observation,null);
   const expense = await row('select * from public.trip_expenses where id=$1',[legacyExpense]);
   assert.equal(expense.activity_id,legacyActivity);
   assert.equal(Number(expense.amount_cents),8000);
@@ -84,6 +87,31 @@ test('incremental migration preserves IDs, data, budgets and original authorizat
   assert.equal((await rows('select * from public.list_authorized_collections()')).length,0,'an old owner invite never gains broader collection access');
   assert.equal((await row('select private.is_trip_owner($1) as yes',[legacyTrip])).yes,true);
   assert.equal((await row('select * from public.list_authorized_trips()')).collection_role,null);
+});
+
+test('activity saves accept each canonical schedule type and persist optional multiline observations', async () => {
+  await as('authenticated', owner);
+  const types = ['Refeição', 'Lazer', 'Atividade'];
+  for (const [index, type] of types.entries()) {
+    const saved = await saveActivity(legacyTrip, `50000000-0000-4000-8000-00000000010${index + 1}`, 10000, type, null);
+    assert.equal(saved.type, type);
+    assert.equal(saved.observation, null);
+  }
+
+  const id = '50000000-0000-4000-8000-000000000020';
+  const note = '  Reservar uma mesa perto da janela.\n\nChegar 15 minutos antes.  ';
+  const created = await saveActivity(legacyTrip, id, 4500, 'Refeição', null);
+  const edited = await saveActivity(legacyTrip, id, 4500, 'Refeição', note, created.version);
+  assert.equal(edited.observation, 'Reservar uma mesa perto da janela.\n\nChegar 15 minutos antes.');
+  assert.equal(edited.version, created.version + 1);
+
+  const cleared = await saveActivity(legacyTrip, id, 4500, 'Lazer', ' \n\t ', edited.version);
+  assert.equal(cleared.type, 'Lazer');
+  assert.equal(cleared.observation, null);
+  assert.equal(cleared.version, edited.version + 1);
+
+  await assert.rejects(saveActivity(legacyTrip, '50000000-0000-4000-8000-000000000030', 4500, 'refeição'), /INVALID_ACTIVITY_TYPE/);
+  await assert.rejects(saveActivity(legacyTrip, '50000000-0000-4000-8000-000000000031', 4500, 'refeicao'), /INVALID_ACTIVITY_TYPE/);
 });
 
 test('the old automatic public association is disabled and knowing IDs reveals no private data', async () => {

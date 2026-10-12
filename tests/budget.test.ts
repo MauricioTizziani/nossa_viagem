@@ -7,7 +7,7 @@ import { EMPTY_PLACE, type Activity, type Expense, type ExpenseCategory, type Tr
 
 const trip = (initial_budget_cents: number | null) => ({ id: "trip", initial_budget_cents });
 const fullTrip = (initial_budget_cents: number | null): Trip => ({ id: "trip", name: "Nossa Viagem", destination: "", start_date: "2026-10-10", end_date: "2026-10-12", timezone: "America/Sao_Paulo", person_one: null, person_two: null, initial_budget_cents, version: 1 });
-const activity = (id: string, budget_cents: number | null, type: Activity["type"] = "Lazer", name = id): Activity => ({ id, trip_id: "trip", name, starts_at: "2026-10-10T15:00:00Z", budget_cents, type, version: 1, ...EMPTY_PLACE });
+const activity = (id: string, budget_cents: number | null, type: Activity["type"] = "Lazer", name = id): Activity => ({ id, trip_id: "trip", name, starts_at: "2026-10-10T15:00:00Z", budget_cents, type, observation: null, version: 1, ...EMPTY_PLACE });
 const expense = (id: string, amount_cents: number, extra: Partial<Expense> = {}): Expense => ({ id, trip_id: "trip", description: id, category: "Outros" as ExpenseCategory, amount_cents, expense_date: "2026-10-10", activity_id: null, notes: null, version: 1, ...extra });
 
 test("the initial budget accepts cents and zero, and never turns an empty field into zero", () => {

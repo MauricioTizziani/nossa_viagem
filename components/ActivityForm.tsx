@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CalendarDays, Check, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { Activity, ActivityInput, PlaceValue, Trip } from '@/lib/types';
-import { EMPTY_PLACE } from '@/lib/types';
+import { ACTIVITY_TYPES, EMPTY_PLACE } from '@/lib/types';
 import { parseBudgetCents, budgetInputValue, isoToLocalDateTime, localDateTimeToIso, isOutsideTripPeriod, validateActivityInput } from '@/lib/domain';
 import { friendlyError } from '@/lib/useTravelData';
 import PlacePicker from './OsmPlacePicker';
@@ -18,6 +18,7 @@ export default function ActivityForm({ activity, duplicate, trip, online, onSave
   const [budget, setBudget] = useState(activity ? budgetInputValue(activity.budget_cents) : '');
   const [name, setName] = useState(activity?.name ?? '');
   const [type, setType] = useState<ActivityInput['type']>(activity?.type ?? 'Atividade');
+  const [observation, setObservation] = useState(activity?.observation ?? '');
   const [place, setPlace] = useState<PlaceValue>(activity ? Object.fromEntries(Object.keys(EMPTY_PLACE).map(key => [key, activity[key as keyof PlaceValue] ?? null])) as unknown as PlaceValue : { ...EMPTY_PLACE });
   const [dirty, setDirty] = useState(Boolean(duplicate));
   const [saving, setSaving] = useState(false);
@@ -43,11 +44,12 @@ export default function ActivityForm({ activity, duplicate, trip, online, onSave
       if (isOutsideTripPeriod(startsAt, trip) && !outsideAccepted) throw new Error('Revise a data e confirme o aviso sobre o período da viagem.');
       if (!online) throw new Error('Você está offline. O formulário será mantido; conecte-se para salvar.');
       locked.current = true; setSaving(true);
-      await onSave(validateActivityInput({ starts_at: startsAt, budget_cents: cents, name: cleanName, type, ...place }), id.current, activity && !duplicate ? activity.version : 0);
+      await onSave(validateActivityInput({ starts_at: startsAt, budget_cents: cents, name: cleanName, type, observation, ...place }), id.current, activity && !duplicate ? activity.version : 0);
       onClose();
     } catch (err) {
       const message = err && typeof err === 'object' && 'message' in err ? String(err.message) : '';
       const codeError = err && typeof err === 'object' && 'code' in err;
+      if (codeError) console.error('Falha ao salvar atividade no Supabase.', { code: String((err as { code: unknown }).code) });
       setConflict(message.includes('VERSION_CONFLICT'));
       setError(codeError || /VERSION_CONFLICT|Failed to fetch|Network/.test(message) ? friendlyError(err) : message || friendlyError(err));
     } finally { locked.current = false; setSaving(false); }
@@ -58,7 +60,8 @@ export default function ActivityForm({ activity, duplicate, trip, online, onSave
       <label className="field-label">Orçamento (R$)<div className="input-icon"><span>R$</span><input inputMode="decimal" placeholder="A definir" value={budget} maxLength={16} onChange={e => { setBudget(e.target.value); changed(); }}/></div><span className="field-hint">Valor previsto para a atividade. Deixe vazio se ainda não souber.</span></label>
       <label className="field-label">Nome da atividade <span className="required">*</span><input required maxLength={160} value={name} placeholder="Jantar especial, passeio no parque…" onChange={e => { setName(e.target.value); changed(); }}/></label>
       <div className="field-label">Lugar<PlacePicker value={place} onChange={value => { setPlace(value); changed(); }} disabled={saving}/></div>
-      <label className="field-label">Tipo <span className="required">*</span><select required value={type} onChange={e => { setType(e.target.value as ActivityInput['type']); changed(); }}><option>Refeição</option><option>Lazer</option><option>Atividade</option></select></label>
+      <label className="field-label">Tipo <span className="required">*</span><select required value={type} onChange={e => { setType(e.target.value as ActivityInput['type']); changed(); }}>{ACTIVITY_TYPES.map(activityType => <option key={activityType} value={activityType}>{activityType}</option>)}</select></label>
+      <label className="field-label">Observação<textarea aria-label="Observação" value={observation} placeholder="Adicione detalhes, lembretes ou informações importantes sobre esta atividade." onChange={e => { setObservation(e.target.value); changed(); }}/></label>
       {outside && <label className="notice notice-warm check-notice"><input type="checkbox" checked={outsideAccepted} onChange={e => setOutsideAccepted(e.target.checked)}/><span>Esta atividade está fora do período da viagem. Revise a data ou marque para manter mesmo assim.</span></label>}
       {editingTimezone !== trip.timezone && <p className="notice notice-warm">O fuso da viagem foi alterado em outro aparelho. Este formulário mantém {editingTimezone.replaceAll('_', ' ')}. Para usar o novo fuso, feche e reabra a atividade.</p>}
       {!online && <p className="notice">Você está offline. Seu formulário continua aqui; conecte-se para salvar.</p>}

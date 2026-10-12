@@ -6,7 +6,7 @@ import { EMPTY_PLACE, type Activity } from "../lib/types";
 
 const feature = (properties = {}, coordinates: unknown[] = [-43.1794045, -22.8940683]) => ({ type: "Feature", properties: { osm_type: "W", osm_id: 372720167, name: "Museu do Amanhã", street: "Praça Mauá", housenumber: "1", city: "Rio de Janeiro", country: "Brasil", ...properties }, geometry: { type: "Point", coordinates } });
 const selected = () => parsePhotonResults({ features: [feature()] })[0];
-const activity = (): Activity => ({ ...selected(), id: "a", trip_id: "t", version: 1, starts_at: "2030-04-10T15:00:00Z", name: "Passeio", budget_cents: null, type: "Lazer" });
+const activity = (): Activity => ({ ...selected(), id: "a", trip_id: "t", version: 1, starts_at: "2030-04-10T15:00:00Z", name: "Passeio", budget_cents: null, type: "Lazer", observation: null });
 
 test("Photon parses real OSM identity and longitude/latitude in the correct order", () => {
   const place = selected();

@@ -10,7 +10,7 @@ import { budgetInputValue, dateKey, directionsUrl, filterActivities, formatCurre
 import { EMPTY_PLACE, type Activity, type Trip } from "../lib/types";
 
 const trip: Trip = { id: "trip", name: "Nossa Viagem", destination: "", start_date: null, end_date: null, timezone: "America/Sao_Paulo", person_one: null, person_two: null, initial_budget_cents: null, version: 1 };
-const activity = (id: string, starts_at: string, budget_cents: number | null, type: Activity["type"] = "Atividade", name = id): Activity => ({ id, trip_id: "trip", name, starts_at, budget_cents, type, version: 1, ...EMPTY_PLACE });
+const activity = (id: string, starts_at: string, budget_cents: number | null, type: Activity["type"] = "Atividade", name = id): Activity => ({ id, trip_id: "trip", name, starts_at, budget_cents, type, observation: null, version: 1, ...EMPTY_PLACE });
 
 test("currency uses exact integer cents, with zero distinct from undefined", () => {
   assert.equal(parseBudgetCents(""), null);
@@ -73,7 +73,7 @@ test("activities sort chronologically, allow equal times and group in the trip z
 
 test("filters include manual and transient Google place text and accent-insensitive names", () => {
   const list = [
-    { ...activity("one", "2026-10-08T15:00:00Z", 10, "Refeição", "Café especial"), manual_place_name: "Cafeteria", manual_place_address: "Rua das Flores" },
+    { ...activity("one", "2026-10-08T15:00:00Z", 10, "Refeição", "Café especial"), observation: "Reservar mesa perto da janela", manual_place_name: "Cafeteria", manual_place_address: "Rua das Flores" },
     { ...activity("two", "2026-10-09T15:00:00Z", 20, "Lazer"), place_id: "selected-place" },
     activity("three", "2026-10-09T15:00:00Z", null),
   ];
@@ -82,6 +82,7 @@ test("filters include manual and transient Google place text and accent-insensit
   assert.equal(filterActivities(list, { search: "museu" }, trip.timezone, { "selected-place": { name: "Museu", address: "Centro", source: "google" } })[0].id, "two");
   assert.equal(filterActivities(list, { day: "2026-10-09", type: "Lazer" }, trip.timezone)[0].id, "two");
   assert.equal(filterActivities(list, { day: "all", type: "all", search: "" }, trip.timezone).length, 3);
+  assert.equal(filterActivities(list, { search: "janela" }, trip.timezone)[0].id, "one");
 });
 
 test("totals reflect current rows and distinguish budgets yet to define", () => {
@@ -132,6 +133,15 @@ test("activity validation preserves zero, trims user text and rejects invalid fi
   assert.throws(() => validateActivityInput({ ...input, manual_place_url: "https://example.com" }));
   assert.equal(validateActivityInput({ ...input, manual_place_url: "  HTTPS://WWW.GOOGLE.COM:443/maps/place/Museu  " }).manual_place_url, "https://www.google.com/maps/place/Museu");
   assert.equal(validateActivityInput({ ...input, manual_place_url: "https://MAPS.APP.GOO.GL:443/AbCd" }).manual_place_url, "https://maps.app.goo.gl/AbCd");
+});
+
+test("activity observations trim only their edges and schedule types match the shared database contract", () => {
+  const input = activity("observation", "2026-10-09T12:00:00Z", null);
+  const note = "  Reservar uma mesa.\n\nChegar 15 minutos antes.  ";
+  assert.equal(validateActivityInput({ ...input, observation: note }).observation, "Reservar uma mesa.\n\nChegar 15 minutos antes.");
+  assert.equal(validateActivityInput({ ...input, observation: " \n\t  " }).observation, null);
+  for (const type of ["Refeição", "Lazer", "Atividade"] as const) assert.equal(validateActivityInput({ ...input, type }).type, type);
+  for (const type of ["refeição", "refeicao", " Refeição "] as const) assert.throws(() => validateActivityInput({ ...input, type: type as Activity["type"] }));
 });
 
 test("PWA worker precaches a clean public shell and ignores private/API/Google requests", async () => {

@@ -7,6 +7,7 @@ import { clearSnapshot, readOfflineSnapshot, readOfflineUserId, saveSnapshot } f
 import { readAllPages, responseBelongsToRequest } from './dataQueries';
 
 export const emptyTrip: Trip = { id: '', name: '', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: null, archived_at: null, version: 1 };
+export const ACTIVITY_MIGRATION = '202610120001_observacao_atividade.sql';
 export const EXPENSES_MIGRATION = '202610080004_gastos.sql';
 export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';
@@ -15,12 +16,17 @@ function messageOf(error: unknown): string { return error && typeof error === 'o
 function isMissingExpensesSchema(error: unknown): boolean {
   return ['PGRST205', 'PGRST202', '42P01', '42883'].includes(errorCode(error)) && /trip_expenses|save_expense|delete_expense/.test(messageOf(error));
 }
+function isMissingActivitySchema(error: unknown): boolean {
+  return ['PGRST202', 'PGRST205', '42883'].includes(errorCode(error)) && /save_activity|activities.*observation/.test(messageOf(error));
+}
 function isAccessDenied(error: unknown) { return messageOf(error).includes('ACCESS_DENIED') || errorCode(error) === '42501'; }
 export function friendlyError(error: unknown): string {
   const message = messageOf(error);
   if (message.includes('SYNC_BUSY')) return 'Esta viagem está recebendo alterações em outro aparelho. Atualize os dados novamente para carregar os totais completos.';
   if (message.includes('VERSION_CONFLICT')) return 'Esta informação mudou em outro aparelho. Carregue a versão atual antes de salvar novamente.';
+  if (message.includes('INVALID_ACTIVITY_TYPE')) return 'Escolha Refeição, Lazer ou Atividade para esta atividade.';
   if (message.includes('ACCESS_DENIED')) return 'Este aparelho não tem mais acesso a esta viagem. Abra Minhas viagens para ver as viagens autorizadas.';
+  if (message.includes('ACTIVITY_MIGRATION_PENDING') || isMissingActivitySchema(error)) return `Falta aplicar a atualização das atividades no Supabase: ${ACTIVITY_MIGRATION}.`;
   if (/INVALID_INVITE|INVITE_EXPIRED|INVITE_REVOKED|INVITE_EXHAUSTED|INVITE_USED/.test(message)) return 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.';
   if (message.includes('EXPENSES_MIGRATION_PENDING') || isMissingExpensesSchema(error)) return `Falta aplicar a atualização de gastos no Supabase: ${EXPENSES_MIGRATION}.`;
   if (message.includes('BUDGET_MIGRATION_PENDING') || message.includes('INVALID_INITIAL_BUDGET') || (errorCode(error) === 'PGRST202' && /update_trip/.test(message) && /initial_budget|touch_budget/.test(message))) return message.includes('INVALID_INITIAL_BUDGET') ? 'Informe um orçamento inicial válido e não negativo.' : `Falta aplicar a atualização de orçamento inicial no Supabase: ${BUDGET_MIGRATION}.`;
@@ -77,12 +83,13 @@ export function useTravelData(tripId: string) {
         if (tripResult.error) throw tripResult.error;
         if (!tripResult.data) throw new Error('ACCESS_DENIED');
         const currentTrip = normalizeTrip(tripResult.data as Trip);
-        const [records, expenseResult, membership, collections] = await Promise.all([
+        const [loadedActivities, expenseResult, membership, collections] = await Promise.all([
           readAllPages<Activity>(async (offset, size) => await client.from('activities').select('*').eq('trip_id', tripId).order('id').range(offset, offset + size - 1).abortSignal(abort.signal)),
           readAllPages<Expense>(async (offset, size) => await client.from('trip_expenses').select('*').eq('trip_id', tripId).order('id').range(offset, offset + size - 1).abortSignal(abort.signal)).then(data => ({ data, available: true }), err => { if (isMissingExpensesSchema(err)) return { data: [] as Expense[], available: false }; throw err; }),
           client.from('trip_members').select('role').eq('trip_id', tripId).eq('user_id', userId).abortSignal(abort.signal).maybeSingle(),
           client.rpc('list_authorized_collections').abortSignal(abort.signal),
         ]);
+        const records = loadedActivities.map(activity => ({ ...activity, observation: activity.observation ?? null }));
         if (membership.error) throw membership.error;
         if (collections.error) throw collections.error;
         if (records.some(row => row.trip_id !== tripId) || expenseResult.data.some(row => row.trip_id !== tripId)) throw new Error('ACCESS_DENIED');
@@ -180,7 +187,7 @@ export function useTravelData(tripId: string) {
   }
   async function saveActivity(input: ActivityInput, id: string, expectedVersion: number) {
     requireWrite();
-    const result = await getSupabase().rpc('save_activity', { p_trip_id: tripId, p_id: id, p_expected_version: expectedVersion, p_starts_at: input.starts_at, p_budget_cents: input.budget_cents, p_name: input.name, p_type: input.type,
+    const result = await getSupabase().rpc('save_activity', { p_trip_id: tripId, p_id: id, p_expected_version: expectedVersion, p_starts_at: input.starts_at, p_budget_cents: input.budget_cents, p_name: input.name, p_type: input.type, p_observation: input.observation,
       p_place_id: input.place_id, p_manual_place_name: input.manual_place_name, p_manual_place_address: input.manual_place_address, p_manual_place_url: input.manual_place_url, p_osm_place_id: input.osm_place_id, p_osm_place_name: input.osm_place_name, p_osm_place_address: input.osm_place_address, p_osm_latitude: input.osm_latitude, p_osm_longitude: input.osm_longitude });
     if (result.error) failWrite(result.error); await afterWrite();
   }
@@ -209,7 +216,8 @@ export function useTravelData(tripId: string) {
   }
   async function latestActivity(id: string): Promise<Activity> {
     requireWrite(); const result = await getSupabase().from('activities').select('*').eq('id', id).eq('trip_id', tripId).single();
-    if (result.error) throw new Error('A atividade não está mais disponível. Atualize o cronograma.'); return result.data as Activity;
+    if (result.error) throw new Error('A atividade não está mais disponível. Atualize o cronograma.');
+    const activity = result.data as Activity; return { ...activity, observation: activity.observation ?? null };
   }
   async function latestExpense(id: string): Promise<Expense> {
     requireExpenses(); const result = await getSupabase().from('trip_expenses').select('*').eq('id', id).eq('trip_id', tripId).single();

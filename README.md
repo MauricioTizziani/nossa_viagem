@@ -24,9 +24,9 @@ Variáveis públicas entram no navegador. Segredos administrativos ficam exclusi
 
 ## Atualização do banco e preservação dos dados
 
-Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique as migrações de `supabase/migrations/` na ordem 001 a 006. Em um banco atualizado até 005, aplique somente:
+Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique as migrações de `supabase/migrations/` na ordem 001 a 007. Em um banco atualizado até 005, aplique 006 e depois 007. Se já estiver atualizado até 006, aplique somente:
 
-**`202610080006_multiplas_viagens.sql`**
+**`202610120001_observacao_atividade.sql`**
 
 Essa migração preserva os identificadores, períodos, valores, atividades, gastos, lugares, vínculos e membros existentes. Cada viagem antiga recebe uma coleção privada. Todas as autorizações antigas, inclusive de proprietários, continuam restritas às viagens que já podiam acessar. O acesso à coleção exige uma autorização explícita; convites antigos de proprietário também não ampliam esse escopo. Uma reexecução não duplica registros nem promove convites de uma viagem para toda a coleção.
 
@@ -112,7 +112,7 @@ Os testes de banco executam migrações reais em PostgreSQL local com PGlite. Ve
 
 O teste de aplicativo compila em `.next-test`, usa uma simulação HTTP do Supabase exclusivamente em memória e Chrome instalado. Verifica os fluxos da interface, vários contextos de navegador, formulários, troca de viagem, indicadores e consulta offline. Registros fictícios existem somente nessa simulação. As capturas ficam em `artifacts/`. `npm run test:ui` faz uma verificação da interface sem backend configurado.
 
-Antes de uso real, aplique 006 no Supabase, publique a aplicação com as variáveis públicas corretas e valide um convite em outro aparelho, sincronização remota, revogação administrativa de acesso e instalação em HTTPS. Os testes locais não comprovam Auth/Realtime remotos nem disponibilidade do Photon.
+Antes de uso real, aplique 006 e 007 no Supabase, publique a aplicação com as variáveis públicas corretas e valide um convite em outro aparelho, sincronização remota, revogação administrativa de acesso e instalação em HTTPS. Os testes locais não comprovam Auth/Realtime remotos nem disponibilidade do Photon.
 
 ## Organização e problemas comuns
 
@@ -124,6 +124,8 @@ Antes de uso real, aplique 006 no Supabase, publique a aplicação com as variá
 - `scripts/provision-owner.mjs`: recuperação explícita de propriedade da viagem ou coleção.
 
 **Atualização de múltiplas viagens pendente:** aplique `202610080006_multiplas_viagens.sql` depois de 005 e aguarde a atualização do schema da Data API.
+
+**Observações de atividade pendentes:** aplique `202610120001_observacao_atividade.sql` depois de 006 e aguarde a atualização do schema da Data API.
 
 **Viagem ausente em um aparelho novo:** use um convite privado; a identidade de outro aparelho não é reutilizada automaticamente. Confira o escopo, a validade e o uso do convite.
 
