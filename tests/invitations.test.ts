@@ -1,9 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { invitationUrl } from '../lib/invitationLinks';
+
+test('invitation links use the Render or custom domain and keep tokens only in fragments', () => {
+  const token = 'a'.repeat(64);
+  const render = new URL(invitationUrl('https://nossas-viagens.onrender.com', 'collection', token));
+  assert.equal(render.origin, 'https://nossas-viagens.onrender.com');
+  assert.equal(render.pathname, '/viagens');
+  assert.equal(render.search, '');
+  assert.equal(render.hash, `#colecao=${token}`);
+  const custom = new URL(invitationUrl('https://viagem.example/viagens/old?filter=all#old', 'trip', token));
+  assert.equal(custom.origin, 'https://viagem.example');
+  assert.equal(custom.pathname, '/viagens');
+  assert.equal(custom.search, '');
+  assert.equal(custom.hash, `#convite=${token}`);
+  const allTrips = new URL(invitationUrl('https://viagem.example', 'site', token));
+  assert.equal(allTrips.hash, `#invite=${token}&scope=site`);
+  assert.throws(() => invitationUrl('file:///local', 'trip', token));
+  assert.throws(() => invitationUrl('https://viagem.example', 'collection', 'bad&convite=other'));
+});
 
 const tripId = '00000000-0000-4000-8000-000000000011';
 const collectionId = '00000000-0000-4000-8000-000000000012';
 const userId = '00000000-0000-4000-8000-000000000013';
+const siteOwnerId = '00000000-0000-4000-8000-000000000014';
 const calls: { rpc: string; body: Record<string, unknown> }[] = [];
 const saved = new Map<string, string>();
 let hash = '';
@@ -27,14 +47,15 @@ globalThis.fetch = async (input, init) => {
     calls.push({ rpc, body: JSON.parse(String(init?.body)) });
     assert.equal(hash, '', 'the token fragment was removed before the RPC');
     if (invalid) return new Response(JSON.stringify({ code: '22023', message: 'INVALID_INVITE' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-    return new Response(JSON.stringify(rpc === 'redeem_collection_invite' ? collectionId : tripId), { headers: { 'Content-Type': 'application/json' } });
+    const id = rpc === 'redeem_collection_invite' ? collectionId : rpc === 'redeem_site_invite' ? siteOwnerId : tripId;
+    return new Response(JSON.stringify(id), { headers: { 'Content-Type': 'application/json' } });
   }
   throw new Error('Unexpected endpoint in invitation test');
 };
 let session: typeof import('../lib/supabase');
 const sessionReady = import('../lib/supabase').then(result => { session = result; });
 
-test('legacy trip invitations stay trip scoped and explicit collection invitations use their own RPC', async () => {
+test('trip, collection, and site invitations redeem through their explicit scopes', async () => {
   await sessionReady;
   try {
     hash = '#convite=private-trip-token';
@@ -49,8 +70,12 @@ test('legacy trip invitations stay trip scoped and explicit collection invitatio
     assert.equal(await session.initializeSession(), userId);
     assert.deepEqual(calls.at(-1), { rpc: 'redeem_collection_invite', body: { p_token: 'private-collection-token' } });
     assert.deepEqual(session.takeRedeemedInvitation(), { scope: 'collection', id: collectionId });
+    hash = '#invite=private-site-token&scope=site';
+    assert.equal(await session.initializeSession(), userId);
+    assert.deepEqual(calls.at(-1), { rpc: 'redeem_site_invite', body: { p_token: 'private-site-token' } });
+    assert.deepEqual(session.takeRedeemedInvitation(), { scope: 'site', id: siteOwnerId });
     assert.ok(cleaned.every(url => url === '/viagens'));
-    assert.ok([...saved.values()].every(value => !value.includes('private-trip-token') && !value.includes('private-collection-token')));
+    assert.ok([...saved.values()].every(value => !value.includes('private-trip-token') && !value.includes('private-collection-token') && !value.includes('private-site-token')));
     assert.equal(calls.some(call => call.rpc === 'open_shared_trip'), false);
   } finally { session.getSupabase().auth.stopAutoRefresh(); }
 });
@@ -60,6 +85,9 @@ test('ambiguous scopes are removed and rejected instead of silently widening acc
   assert.throws(() => session.captureInvitation(), /INVALID_INVITE/);
   assert.equal(hash, '');
   hash = '#invite=token-without-scope';
+  assert.throws(() => session.captureInvitation(), /INVALID_INVITE/);
+  assert.equal(hash, '');
+  hash = '#invite=token&scope=unknown';
   assert.throws(() => session.captureInvitation(), /INVALID_INVITE/);
   assert.equal(hash, '');
 });

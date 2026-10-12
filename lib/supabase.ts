@@ -12,8 +12,8 @@ export function getSupabase(): SupabaseClient {
   return client;
 }
 let initialization: Promise<string> | null = null;
-let invitation: { scope: 'trip' | 'collection'; token: string } | null = null;
-let redeemedInvitation: { scope: 'trip' | 'collection'; id: string } | null = null;
+let invitation: { scope: 'trip' | 'collection' | 'site'; token: string } | null = null;
+let redeemedInvitation: { scope: 'trip' | 'collection' | 'site'; id: string } | null = null;
 export function resetSessionInitialization() { initialization = null; redeemedInvitation = null; }
 /** Consume private fragments synchronously, before network/auth requests begin. */
 export function captureInvitation() {
@@ -26,11 +26,11 @@ export function captureInvitation() {
   const token = collectionToken ?? tripToken ?? explicitToken;
   if (!token) return;
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
-  if ([tripToken, collectionToken, explicitToken].filter(Boolean).length > 1 || (explicitToken && explicitScope !== 'trip' && explicitScope !== 'collection')) {
+  if ([tripToken, collectionToken, explicitToken].filter(Boolean).length > 1 || (explicitToken && explicitScope !== 'trip' && explicitScope !== 'collection' && explicitScope !== 'site')) {
     invitation = null;
     throw new Error('INVALID_INVITE');
   }
-  invitation = { scope: collectionToken ? 'collection' : tripToken ? 'trip' : explicitScope as 'trip' | 'collection', token };
+  invitation = { scope: collectionToken ? 'collection' : tripToken ? 'trip' : explicitScope as 'trip' | 'collection' | 'site', token };
   // A new invitation must also be redeemed in an already initialized anonymous session.
   initialization = null;
 }
@@ -59,7 +59,8 @@ export async function initializeSession(): Promise<string> {
     if (invitation) {
       if (!navigator.onLine) throw new Error('Conecte-se para confirmar este convite privado.');
       const pending = invitation;
-      const result = await supabase.rpc(pending.scope === 'collection' ? 'redeem_collection_invite' : 'redeem_trip_invite', { p_token: pending.token });
+      const rpc = pending.scope === 'site' ? 'redeem_site_invite' : pending.scope === 'collection' ? 'redeem_collection_invite' : 'redeem_trip_invite';
+      const result = await supabase.rpc(rpc, { p_token: pending.token });
       if (result.error) { if (String(result.error.message).includes('INVALID_INVITE')) invitation = null; throw result.error; }
       const id = Array.isArray(result.data) ? result.data[0] : result.data;
       if (typeof id !== 'string') throw new Error('INVALID_INVITE');

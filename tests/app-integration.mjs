@@ -33,6 +33,7 @@ const collections = new Map([[collectionId, { id: collectionId, created_at: now(
 const users = new Map();
 const memberships = new Map();
 const collectionMemberships = new Map();
+const siteMemberships = new Map();
 const activities = new Map();
 const expenses = new Map();
 const invitations = [
@@ -83,10 +84,16 @@ async function body(request) {
 }
 function memberKey(userId, target) { return `${userId}:${target}`; }
 function collectionRole(userId, id) { return collectionMemberships.get(memberKey(userId, id))?.role ?? null; }
+function ownsTrip(userId, id) {
+  return memberships.get(memberKey(userId,id))?.role === 'owner' || collectionRole(userId,trips.get(id)?.collection_id) === 'owner';
+}
 function tripRole(userId, id) {
   const direct = memberships.get(memberKey(userId,id))?.role;
   const shared = collectionRole(userId,trips.get(id)?.collection_id);
-  return direct === 'owner' || shared === 'owner' ? 'owner' : direct || shared ? 'member' : null;
+  if (direct === 'owner' || shared === 'owner') return 'owner';
+  if (direct || shared) return 'member';
+  const siteAccess = [...siteMemberships.values()].some(item => item.member_id === userId && ownsTrip(item.owner_id,id));
+  return siteAccess ? 'member' : null;
 }
 function tripPhase(value) {
   if (!value.start_date || !value.end_date) return 'undated';
@@ -151,10 +158,15 @@ const fixture = createServer(async (request, response) => {
     if(delayedRpcs.has(rpc)) await new Promise(resolve=>setTimeout(resolve,delayedRpcs.get(rpc)));
     if(failedRpcs.has(rpc)) { const failure=failedRpcs.get(rpc); failedRpcs.delete(rpc); deny(response,failure.message,failure.code??'XX000',failure.status??500); return; }
     if (rpc === 'open_shared_trip') { deny(response,'PRIVATE_ACCESS_REQUIRED'); return; }
-    if (rpc === 'redeem_trip_invite' || rpc === 'redeem_collection_invite') {
-      const scope=rpc==='redeem_trip_invite'?'trip':'collection';
+    if (rpc === 'redeem_trip_invite' || rpc === 'redeem_collection_invite' || rpc === 'redeem_site_invite') {
+      const scope=rpc==='redeem_trip_invite'?'trip':rpc==='redeem_collection_invite'?'collection':'site';
       const invite=invitations.find(item=>item.token===input.p_token && item.scope===scope);
       if(!invite || invite.revoked_at || Date.parse(invite.expires_at)<=Date.now() || (!invite.users.has(user.id) && invite.use_count>=invite.max_uses)) { deny(response,'INVALID_INVITE','22023',400); return; }
+      if (scope === 'site') {
+        siteMemberships.set(memberKey(user.id,invite.target),{ member_id:user.id,owner_id:invite.target });
+        if(!invite.users.has(user.id)) { invite.users.add(user.id); invite.use_count++; invite.last_used_at=now(); }
+        respond(response,invite.target); return;
+      }
       const store=scope==='trip'?memberships:collectionMemberships;
       const key=memberKey(user.id,invite.target);
       const prior=store.get(key);
@@ -189,6 +201,18 @@ const fixture = createServer(async (request, response) => {
         initial_budget_cents:input.p_initial_budget_cents,archived_at:null,version:1,created_at:now(),updated_at:now() };
       trips.set(created.id,created); memberships.set(memberKey(user.id,created.id),{ user_id:user.id,trip_id:created.id,role:'owner' });
       respond(response,created); return;
+    }
+    if (['list_site_invites','create_site_invite','revoke_site_invite'].includes(rpc)) {
+      const existing=invitations.find(item=>item.id===input.p_invite_id&&item.scope==='site');
+      if (rpc==='list_site_invites') { respond(response,invitations.filter(item=>item.scope==='site'&&item.target===user.id).map(safeInvite)); return; }
+      if (rpc==='revoke_site_invite') {
+        if (!existing || existing.target!==user.id) { deny(response); return; }
+        existing.revoked_at=now(); respond(response,null); return;
+      }
+      const invite = { id: randomUUID(), role: 'member', expires_at: new Date(Date.now() + 86400000).toISOString(),
+        max_uses: 1, use_count: 0, revoked_at: null, created_at: now(), last_used_at: null,
+        scope:'site',target:user.id,token:randomUUID().replaceAll('-','')+randomUUID().replaceAll('-',''),users:new Set() };
+      invitations.push(invite); respond(response, [{ ...safeInvite(invite), invite_id: invite.id, token: invite.token }]); return;
     }
     if(rpc==='set_trip_archived') {
       const target=trips.get(input.p_id);
@@ -909,10 +933,37 @@ try {
   assert.equal(await owner.page.getByText('Gasto só da segunda viagem',{exact:true}).count(),0);
   passed('Pesquisa e filtro por período funcionam; arquivar/desarquivar preserva atividades, gastos, datas e orçamento sem afetar a viagem anterior.');
 
-  const tripInviteUrl = `${appOrigin}/#convite=${tripOnlyToken}`;
+  await navigate(owner.page, 'Gerar convite');
+  let inviteDialog = owner.page.getByRole('dialog', { name: 'Convidar outro aparelho' });
+  assert.equal(await inviteDialog.getByRole('radio', { name: /^Todas as viagens desta coleção/ }).isChecked(), true);
+  await inviteDialog.getByRole('radio', { name: /^Somente esta viagem/ }).check();
+  failedRpcs.set('create_trip_invite', { message: 'function public.create_trip_invite is missing', code: 'PGRST202', status: 404 });
+  await inviteDialog.getByRole('button', { name: 'Gerar convite', exact: true }).click();
+  await visibleText(inviteDialog, /202610080006_multiplas_viagens.sql/);
+  assert.equal(await inviteDialog.getByLabel('Link do convite', { exact: true }).count(), 0);
+  const inviteCount = invitations.length;
+  delayedRpcs.set('create_trip_invite', 400);
+  await inviteDialog.getByRole('button', { name: 'Gerar convite', exact: true }).dblclick();
+  await inviteDialog.getByLabel('Link do convite', { exact: true }).waitFor();
+  delayedRpcs.delete('create_trip_invite');
+  assert.equal(invitations.length, inviteCount + 1, 'duplicate clicks create a single invitation');
+  const tripInviteUrl = await inviteDialog.getByLabel('Link do convite', { exact: true }).inputValue();
+  const tripLink = new URL(tripInviteUrl);
+  assert.equal(tripLink.origin, appOrigin);
+  assert.equal(tripLink.pathname, '/viagens');
+  assert.equal(tripLink.search, '');
+  assert.match(tripLink.hash, /^#convite=[0-9a-f]{64}$/);
+  await owner.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: appOrigin });
+  await inviteDialog.getByRole('button', { name: 'Copiar link', exact: true }).click();
+  assert.equal(await owner.page.evaluate(() => navigator.clipboard.readText()), tripInviteUrl);
+  const tripToken = new URLSearchParams(tripLink.hash.slice(1)).get('convite');
+  assert.equal(await owner.page.evaluate(token => Object.values(localStorage).some(value => value.includes(token)), tripToken), false);
+  await inviteDialog.getByRole('button', { name: 'Fechar formulário', exact: true }).click();
   const tripOnly=await context({viewport:{width:1280,height:800}});
   await tripOnly.page.goto(tripInviteUrl);
   await visibleText(tripOnly.page,'Teste conflito resolvido');
+  assert.equal(new URL(tripOnly.page.url()).hash, '');
+  assert.equal(await tripOnly.page.getByRole('button', { name: 'Gerar convite', exact: true }).count(), 0, 'members cannot invite other devices');
   await navigate(tripOnly.page,'Trocar viagem');
   await tripOnly.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
   assert.equal(await tripOnly.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
@@ -920,8 +971,35 @@ try {
   await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
   assert.equal(await tripOnly.page.getByText('Momento só da segunda viagem',{exact:true}).count(),0);
   await navigate(owner.page,'Trocar viagem');
-  assert.equal(await owner.page.getByRole('button',{name:'Convidar aparelho',exact:true}).count(),0);
-  const collectionInviteUrl=`${appOrigin}/#colecao=${collectionGuestToken}`;
+  await owner.page.setViewportSize({ width: 360, height: 780 });
+  const sharingCard = owner.page.locator('.trip-card').filter({ hasText: 'Viagem de teste' });
+  await sharingCard.getByLabel('Ações de Viagem de teste').click();
+  await sharingCard.getByRole('button', { name: 'Gerar convite', exact: true }).click();
+  inviteDialog = owner.page.getByRole('dialog', { name: 'Convidar outro aparelho' });
+  await inviteDialog.getByRole('button', { name: 'Gerar convite', exact: true }).click();
+  await inviteDialog.getByLabel('Link do convite', { exact: true }).waitFor();
+  const revokedUrl = await inviteDialog.getByLabel('Link do convite', { exact: true }).inputValue();
+  await inviteDialog.getByRole('button', { name: /^Desativar convite válido até/ }).first().click();
+  await visibleText(inviteDialog, 'Convite desativado. Aparelhos já autorizados mantêm o acesso.');
+  assert.equal(await inviteDialog.getByLabel('Link do convite', { exact: true }).count(), 0);
+  const revokedVisitor = await context();
+  await revokedVisitor.page.goto(revokedUrl);
+  await visibleText(revokedVisitor.page, 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.');
+  assert.equal(await revokedVisitor.page.locator('.trip-card').count(), 0);
+  await revokedVisitor.context.close();
+  await inviteDialog.getByRole('button', { name: 'Gerar convite', exact: true }).click();
+  await inviteDialog.getByLabel('Link do convite', { exact: true }).waitFor();
+  const collectionInviteUrl = await inviteDialog.getByLabel('Link do convite', { exact: true }).inputValue();
+  assert.match(new URL(collectionInviteUrl).hash, /^#colecao=[0-9a-f]{64}$/);
+  assert.equal(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await owner.page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('Clipboard denied in isolated test'); } } }));
+  await inviteDialog.getByRole('button', { name: 'Copiar link', exact: true }).click();
+  await visibleText(inviteDialog, 'Selecione e copie o link para abrir no outro aparelho.');
+  assert.equal(await inviteDialog.getByLabel('Link do convite', { exact: true }).evaluate(input => input.selectionEnd - input.selectionStart), collectionInviteUrl.length);
+  await owner.page.screenshot({ path: resolve(root, 'artifacts/convite-mobile.png'), fullPage: true });
+  await inviteDialog.getByRole('button', { name: 'Fechar formulário', exact: true }).click();
+  await owner.page.setViewportSize({ width: 1366, height: 900 });
+  passed('O botão gera convites de viagem e coleção pelo domínio atual, copia ou seleciona o link, evita duplo envio e permite desativar um convite sem alterar os dados.');
   const collectionDevice=await context({viewport:{width:360,height:780}});
   await collectionDevice.page.goto(collectionInviteUrl);
   await collectionDevice.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
@@ -929,6 +1007,7 @@ try {
   assert.equal(await collectionDevice.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await collectionDevice.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
   await visibleText(collectionDevice.page,'Momento só da segunda viagem');
+  assert.equal(await collectionDevice.page.getByRole('button', { name: 'Gerar convite', exact: true }).count(), 0);
   assert.equal(new URL(owner.page.url()).pathname,'/viagens','another device never forces a trip selection here');
   const visitor=await context({viewport:{width:1280,height:800}});
   await visitor.page.goto(`${appOrigin}/viagens/${tripB.id}/cronograma`);
@@ -938,6 +1017,40 @@ try {
   assert.equal(rpcCalls.includes('open_shared_trip'),false);
   passed('Convites restritos abrem só uma viagem; acesso à coleção exige autorização explícita; conhecer a URL não revela dados e a seleção é local ao aparelho.');
 
+  const originalOwner = [...collectionMemberships.values()].find(item=>item.collection_id===collectionId&&item.role==='owner')?.user_id;
+  assert.ok(originalOwner,'a coleção original continua ligada à sua identidade proprietária');
+  const separateCollectionId=randomUUID();
+  const separateCollectionTrip={ ...trip,id:randomUUID(),collection_id:separateCollectionId,name:'Viagem de outra coleção',destination:'Lisboa',created_at:now(),updated_at:now() };
+  collections.set(separateCollectionId,{ id:separateCollectionId,created_at:now() });
+  collectionMemberships.set(memberKey(originalOwner,separateCollectionId),{ user_id:originalOwner,collection_id:separateCollectionId,role:'owner' });
+  trips.set(separateCollectionTrip.id,separateCollectionTrip);
+  await owner.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await owner.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
+  await owner.page.getByRole('button',{name:'Compartilhar todas',exact:true}).click();
+  const siteInviteDialog=owner.page.getByRole('dialog',{name:'Compartilhar todas as viagens'});
+  failedRpcs.set('create_site_invite',{ message:'function public.create_site_invite is missing',code:'PGRST202',status:404 });
+  await siteInviteDialog.getByRole('button',{name:'Gerar convite',exact:true}).click();
+  await visibleText(siteInviteDialog,/202610120003_convite_todas_viagens.sql/);
+  const siteInviteCount=invitations.length;
+  await siteInviteDialog.getByRole('button',{name:'Gerar convite',exact:true}).click();
+  await siteInviteDialog.getByLabel('Link do convite',{exact:true}).waitFor();
+  assert.equal(invitations.length,siteInviteCount+1);
+  const siteInviteUrl=await siteInviteDialog.getByLabel('Link do convite',{exact:true}).inputValue();
+  const siteLink=new URL(siteInviteUrl);
+  assert.equal(siteLink.origin,appOrigin);
+  const siteParams=new URLSearchParams(siteLink.hash.slice(1));
+  assert.equal(siteParams.get('scope'),'site');
+  assert.equal(siteParams.size,2);
+  assert.match(siteParams.get('invite')??'',/^[0-9a-f]{64}$/);
+  await siteInviteDialog.getByRole('button',{name:'Fechar formulário',exact:true}).click();
+  const siteDevice=await context({viewport:{width:1280,height:800}});
+  await siteDevice.page.goto(siteInviteUrl);
+  await siteDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
+  assert.equal(new URL(siteDevice.page.url()).hash,'');
+  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de outra coleção'}).count(),1,'the same invite includes a current trip from another collection');
+  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).getByRole('button',{name:'Gerar convite',exact:true}).count(),0,'site members cannot invite others through an owner-only trip action');
+  passed('O botão da tela inicial cria um convite para a identidade inteira e inclui viagens existentes em coleções diferentes.');
+
   await navigate(owner.page,'Nova viagem');
   await owner.page.getByLabel(/Nome da viagem/).fill('Memória da terceira viagem');
   await owner.page.getByLabel(/Orçamento inicial da viagem/).fill('100');
@@ -946,6 +1059,9 @@ try {
   await navigate(owner.page,'Criar viagem');
   await visibleText(owner.page,'Esta viagem faz parte das nossas memórias. Você pode consultar e corrigir seus registros.');
   const tripC=[...trips.values()].find(value=>value.name==='Memória da terceira viagem');
+  await siteDevice.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await siteDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===4);
+  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'}).count(),1,'the accepted identity invite includes trips created later');
   await navigate(owner.page,'Gastos');
   await newExpense(owner.page,{description:'Gasto esquecido da viagem passada',amount:'7',category:'Hospedagem',date:'2021-01-01'});
   await expectTotal(owner.page,'expenses-total','7,00');

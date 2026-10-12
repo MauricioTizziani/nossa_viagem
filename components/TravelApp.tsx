@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, CalendarDays, Check, Heart, MapPin, Plane, Plus, Receipt, RefreshCw, Settings2, Sparkles, Wallet, WifiOff, X, LoaderCircle, Trash2 } from 'lucide-react';
+import { ArrowRight, CalendarDays, Check, Heart, Link, MapPin, Plane, Plus, Receipt, RefreshCw, Settings2, Sparkles, Wallet, WifiOff, X, LoaderCircle, Trash2 } from 'lucide-react';
 import type { Activity, Expense } from '@/lib/types';
 import { formatCurrency, summarizeActivities, tripStatus } from '@/lib/domain';
 import { balanceText, tripBudgetView } from '@/lib/budget';
@@ -15,6 +15,7 @@ import ExpenseForm from './ExpenseForm';
 import TripSettings from './TripSettings';
 import PwaManager from './PwaManager';
 import Modal from './Modal';
+import InvitationDialog from './InvitationDialog';
 import { tripTabs, type TravelTab } from '@/lib/navigation';
 
 type Tab = TravelTab;
@@ -36,6 +37,7 @@ export default function TravelApp({ tripId, tab, onNavigate, onDirtyChange, onBu
   const [deleteError, setDeleteError] = useState('');
   const [lastSavedExpense, setLastSavedExpense] = useState<Expense | null>(null);
   const [toast, setToast] = useState('');
+  const [sharing, setSharing] = useState(false);
   const [now, setNow] = useState<Date | null>(null);
   const totals = summarizeActivities(data.activities);
   const budgetView = tripBudgetView(data.trip, data.activities, data.expensesReady ? data.expenses : null);
@@ -92,7 +94,7 @@ export default function TravelApp({ tripId, tab, onNavigate, onDirtyChange, onBu
     <nav className="desktop-nav" aria-label="Navegação principal">{nav.map(item => <button key={item.id} aria-current={tab === item.id ? 'page' : undefined} className={tab === item.id ? 'active' : ''} onClick={() => navigate(item.id)}><item.icon size={17} strokeWidth={1.7}/>{item.label}</button>)}</nav>
     </div></header>
     <main className="main-content">
-      <div className="trip-context"><button className="text-button" onClick={() => onNavigate('/viagens')}>← Minhas viagens</button><div><strong>{data.trip.name}</strong><span>{data.trip.destination || 'Destino a escolher'}</span></div><button className="button-secondary" onClick={() => onNavigate('/viagens')}>Trocar viagem</button></div>
+      <div className="trip-context"><button className="text-button" onClick={() => onNavigate('/viagens')}>← Minhas viagens</button><div className="trip-context-info"><strong>{data.trip.name}</strong><span>{data.trip.destination || 'Destino a escolher'}</span></div><div className="trip-context-actions">{data.role === 'owner' && <button className="button-secondary" disabled={!data.online} onClick={() => setSharing(true)}><Link size={16}/>Gerar convite</button>}<button className="button-secondary" onClick={() => onNavigate('/viagens')}>Trocar viagem</button></div></div>
       {travelStatus.phase === 'finished' && <div className="notice trip-history-note" role="status"><Heart size={17}/><span>Esta viagem faz parte das nossas memórias. Você pode consultar e corrigir seus registros.</span></div>}
       {data.trip.archived_at && <div className="notice trip-history-note" role="status">Viagem arquivada. Seus planos, gastos e orçamento continuam aqui.</div>}
       {!data.online && data.offlinePartial && <div className="notice" role="status">A cópia desta viagem neste aparelho pode estar incompleta. Conecte-se para atualizar o cronograma, os gastos e seus indicadores.</div>}
@@ -116,6 +118,7 @@ export default function TravelApp({ tripId, tab, onNavigate, onDirtyChange, onBu
     {deleting && <Modal title="Excluir este momento?" subtitle="Você pode adicionar uma nova atividade depois." onClose={() => { if (!deleteBusy) setDeleting(null); }}><div className="delete-content"><p>Excluir <strong>{deleting.name}</strong> do cronograma? A reserva dessa atividade sai do planejamento. O orçamento inicial e os gastos registrados permanecem.</p>{linkedToDeleting.length > 0 && <div className="notice linked-notice"><Receipt size={18}/><span>{linkedToDeleting.length === 1 ? 'Há 1 gasto vinculado a esta atividade. Ele será preservado na aba Gastos; apenas o vínculo será removido.' : `Há ${linkedToDeleting.length} gastos vinculados a esta atividade. Eles serão preservados na aba Gastos; apenas o vínculo será removido.`}</span></div>}{deleteError && <div className="notice notice-error" role="alert"><p>{deleteError}</p>{deleteError.includes('outro aparelho') && <button className="text-button" onClick={async () => { try { const latest = await data.latestActivity(deleting.id); setDeleting(latest); setDeleteError(''); } catch (err) { setDeleteError(friendlyError(err)); } }}><RefreshCw size={16}/>Carregar versão atual</button>}</div>}<div className="form-footer"><button className="button-secondary" disabled={deleteBusy} onClick={() => setDeleting(null)}>Manter atividade</button><button className="button-danger" disabled={deleteBusy || !data.online} onClick={() => void remove()}>{deleteBusy ? <LoaderCircle size={17} className="spin"/> : <Trash2 size={17}/>}Excluir atividade</button></div></div></Modal>}
     {deletingExpense && <Modal title="Excluir este gasto?" subtitle="A atividade relacionada, se houver, não será alterada." onClose={() => { if (!deleteBusy) setDeletingExpense(null); }}><div className="delete-content"><p>Excluir <strong>{deletingExpense.description}</strong> no valor de <strong>{formatCurrency(deletingExpense.amount_cents)}</strong>? Os totais serão atualizados automaticamente.</p>{deleteError && <div className="notice notice-error" role="alert"><p>{deleteError}</p>{deleteError.includes('outro aparelho') && <button className="text-button" onClick={async () => { try { const latest = await data.latestExpense(deletingExpense.id); setDeletingExpense(latest); setDeleteError(''); } catch (err) { setDeleteError(friendlyError(err)); } }}><RefreshCw size={16}/>Carregar versão atual</button>}</div>}<div className="form-footer"><button className="button-secondary" disabled={deleteBusy} onClick={() => setDeletingExpense(null)}>Manter gasto</button><button className="button-danger" disabled={deleteBusy || !data.online} onClick={() => void removeExpense()}>{deleteBusy ? <LoaderCircle size={17} className="spin"/> : <Trash2 size={17}/>}Excluir gasto</button></div></div></Modal>}
     {setup && <Modal title="Vamos preparar a nossa viagem" subtitle="Uma configuração inicial, sem login ou senha no aplicativo." onClose={() => setSetup(false)}><div className="setup-content"><p>Para guardar os planos desta viagem:</p><ol><li>Configure o Supabase, habilite Anonymous Sign-Ins e aplique as migrações indicadas no README.</li><li>Preencha as configurações do arquivo de exemplo e reinicie o aplicativo.</li><li>Cadastre sua viagem. O aplicativo continua sem login e senha.</li></ol><p className="notice">Até a conexão ser configurada, não será possível salvar. Nenhuma atividade ou informação pessoal foi preenchida.</p><button className="button-primary" onClick={() => setSetup(false)}>Entendi<Check size={17}/></button></div></Modal>}
+    {sharing && data.role === 'owner' && <InvitationDialog trip={data.trip} canInviteCollection={data.collectionRole === 'owner'} online={data.online} onClose={() => setSharing(false)} onBusyChange={onBusyChange}/>}
     {toast && <div className="toast" role="status"><Check size={17}/>{toast}<button aria-label="Fechar mensagem" onClick={() => setToast('')}><X size={16}/></button></div>}
   </div>;
 }

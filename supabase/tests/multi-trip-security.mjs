@@ -13,11 +13,14 @@ const outsider = '10000000-0000-4000-8000-000000000104';
 const tripOnlyDevice = '10000000-0000-4000-8000-000000000105';
 const collectionOwnerDevice = '10000000-0000-4000-8000-000000000106';
 const exhaustedDevice = '10000000-0000-4000-8000-000000000107';
+const siteDevice = '10000000-0000-4000-8000-000000000108';
 const legacyTrip = '20000000-0000-4000-8000-000000000101';
 const unownedTrip = '20000000-0000-4000-8000-000000000102';
 const legacyActivity = '30000000-0000-4000-8000-000000000101';
 const legacyExpense = '40000000-0000-4000-8000-000000000101';
 const secondTrip = '20000000-0000-4000-8000-000000000103';
+const crossCollectionTrip = '20000000-0000-4000-8000-000000000114';
+const siteFutureTrip = '20000000-0000-4000-8000-000000000115';
 let collectionId;
 let second;
 async function as(role, user = '') {
@@ -41,6 +44,7 @@ async function spend(trip, id, amount = 5000, activity = null) {
 const migrationUrl = new URL('../migrations/202610080006_multiplas_viagens.sql', import.meta.url);
 const activityObservationMigrationUrl = new URL('../migrations/202610120001_observacao_atividade.sql', import.meta.url);
 const activityTypeMigrationUrl = new URL('../migrations/202610120002_reparar_tipo_atividade.sql', import.meta.url);
+const siteInviteMigrationUrl = new URL('../migrations/202610120003_convite_todas_viagens.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -48,7 +52,7 @@ before(async () => {
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
     create function auth.role() returns text language sql stable as $$ select nullif(current_setting('request.jwt.claim.role',true),'') $$;
     grant usage on schema public,auth,extensions to anon,authenticated,service_role;
-    insert into auth.users(id) values('${owner}'),('${tripMember}'),('${collectionMember}'),('${outsider}'),('${tripOnlyDevice}'),('${collectionOwnerDevice}'),('${exhaustedDevice}');
+    insert into auth.users(id) values('${owner}'),('${tripMember}'),('${collectionMember}'),('${outsider}'),('${tripOnlyDevice}'),('${collectionOwnerDevice}'),('${exhaustedDevice}'),('${siteDevice}');
     create publication supabase_realtime;`);
   for (const filename of ['202610080001_nossa_viagem.sql','202610080002_openstreetmap.sql'])
     await db.exec(await readFile(new URL(`../migrations/${filename}`, import.meta.url), 'utf8'));
@@ -231,6 +235,58 @@ test('trip-only invites remain trip-only while explicit collection invites cover
   await as('postgres');
   await db.exec(await readFile(migrationUrl,'utf8'));
   assert.equal((await rows('select * from public.collection_members where user_id=$1',[tripOnlyDevice])).length,0,'re-running never expands old invites');
+  await db.exec(await readFile(siteInviteMigrationUrl,'utf8'));
+});
+
+test('site invitation authorizes current and future owner trips across collections without exposing other owners', async () => {
+  await as('authenticated', owner);
+  const crossCollection = await create({ id: crossCollectionTrip, collection: null, name: 'Outra coleção do proprietário' });
+  assert.notEqual(crossCollection.collection_id, collectionId);
+  const invite = await row('select * from public.create_site_invite()');
+  assert.match(invite.token, /^[0-9a-f]{64}$/);
+  const pending = await rows('select * from public.list_site_invites()');
+  assert.equal(pending.length, 1);
+  assert.deepEqual(Object.keys(pending[0]).sort(), ['created_at','expires_at','id','last_used_at','max_uses','revoked_at','role','use_count']);
+  await assert.rejects(db.query('select * from public.site_members'), /permission denied/);
+
+  await as('authenticated', siteDevice);
+  assert.equal((await row('select public.redeem_site_invite($1) as id', [invite.token])).id, owner);
+  assert.equal((await row('select public.redeem_site_invite($1) as id', [invite.token])).id, owner, 'same identity can safely reopen its accepted invite');
+  await as('postgres');
+  assert.equal((await row('select count(*)::int as n from public.site_members where owner_id=$1 and member_id=$2', [owner, siteDevice])).n, 1);
+  await as('authenticated', siteDevice);
+  assert.equal((await row('select private.is_trip_member($1) as yes', [legacyTrip])).yes, true);
+  const visible = await rows('select id,trip_role from public.list_authorized_trips()');
+  assert.deepEqual(visible.map(item => item.id).sort(), [legacyTrip, secondTrip, '20000000-0000-4000-8000-000000000113', crossCollectionTrip].sort());
+  assert.ok(visible.every(item => item.trip_role === 'member'), 'site access never grants ownership');
+  assert.equal((await rows('select * from public.list_authorized_collections()')).length, 0, 'site access does not grant collection ownership');
+  assert.equal((await rows('select * from public.trips where id=$1', [crossCollectionTrip])).length, 1);
+  assert.equal((await rows('select * from public.trips where id=$1', ['20000000-0000-4000-8000-000000000111'])).length, 0, 'another owner’s private trip stays hidden');
+  assert.equal((await row('select private.is_trip_owner($1) as yes', [legacyTrip])).yes, false);
+  await saveActivity(legacyTrip, '30000000-0000-4000-8000-000000000115', 9000, 'Refeição');
+  await assert.rejects(db.query('select * from public.create_trip_invite($1,\'member\')', [legacyTrip]), /ACCESS_DENIED/);
+
+  await as('authenticated', owner);
+  const future = await create({ id: siteFutureTrip, collection: null, name: 'Viagem criada depois do convite' });
+  assert.notEqual(future.collection_id, crossCollection.collection_id);
+  await as('authenticated', siteDevice);
+  assert.equal((await rows('select * from public.trips where id=$1', [future.id])).length, 1, 'future owner trips are automatically included even in a new collection');
+  assert.ok((await rows('select * from public.list_authorized_trips()')).some(item => item.id === future.id));
+  await as('authenticated', exhaustedDevice);
+  await assert.rejects(db.query('select public.redeem_site_invite($1)', [invite.token]), /INVITE_EXHAUSTED/);
+
+  await as('postgres');
+  const stored = await row("select encode(token_hash,'hex') as hash from public.site_invites where id=$1", [invite.invite_id]);
+  assert.equal(stored.hash, (await row("select encode(extensions.digest($1,'sha256'),'hex') as hash", [invite.token])).hash);
+  assert.notEqual(stored.hash, invite.token);
+  await as('authenticated', owner);
+  const revoked = await row('select * from public.create_site_invite()');
+  await db.query('select public.revoke_site_invite($1)', [revoked.invite_id]);
+  await as('authenticated', collectionOwnerDevice);
+  await assert.rejects(db.query('select public.redeem_site_invite($1)', [revoked.token]), /INVITE_REVOKED/);
+  await as('postgres');
+  await db.exec(await readFile(siteInviteMigrationUrl, 'utf8'));
+  assert.equal((await rows('select owner_id,member_id from public.site_members')).length, 1, 're-running the migration preserves the accepted site authorization without duplicating it');
 });
 
 test('collection invite tokens are hashed, owner-only, bounded, revocable and expiry aware', async () => {

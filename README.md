@@ -24,15 +24,21 @@ Variáveis públicas entram no navegador. Segredos administrativos ficam exclusi
 
 ## Atualização do banco e preservação dos dados
 
-Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique as migrações de `supabase/migrations/` na ordem 001 a 008. Em um banco atualizado até 005, aplique 006, 007 e 008. Se já estiver atualizado até 006, aplique 007 e 008. Se já estiver atualizado até 007, aplique somente:
+Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique todas as migrações de `supabase/migrations/` na ordem dos nomes. Se o banco já chegou a `202610080006_multiplas_viagens.sql`, aplique as migrações posteriores ainda pendentes, em ordem. Para banco atualizado até `202610120001_observacao_atividade.sql`, aplique:
 
 **`202610120002_reparar_tipo_atividade.sql`**
+
+Depois, aplique também:
+
+**`202610120003_convite_todas_viagens.sql`**
 
 Essa migração reestabelece a validação do banco com os tipos usados pelo formulário: `Refeição`, `Lazer` e `Atividade`. Ela não altera atividades existentes; se encontrar um tipo antigo diferente desses valores, interrompe sem modificar os dados para permitir revisão.
 
 Essa migração preserva os identificadores, períodos, valores, atividades, gastos, lugares, vínculos e membros existentes. Cada viagem antiga recebe uma coleção privada. Todas as autorizações antigas, inclusive de proprietários, continuam restritas às viagens que já podiam acessar. O acesso à coleção exige uma autorização explícita; convites antigos de proprietário também não ampliam esse escopo. Uma reexecução não duplica registros nem promove convites de uma viagem para toda a coleção.
 
 A migração encerra o acesso automático de qualquer visitante do modelo 003. Os aparelhos com autorizações já concedidas continuam vendo suas viagens. O endereço do aplicativo e o ID da viagem, sozinhos, não autorizam acesso. Não reaplique a migração histórica 003 depois de 006.
+
+A migração de compartilhamento cria convites privados para todas as viagens pertencentes à identidade atual e às viagens futuras criadas por ela, inclusive em outras coleções. Cada convite autoriza um aparelho e não concede propriedade. O token é armazenado somente como hash, e as tabelas de convites e membros não podem ser consultadas diretamente pelos aparelhos.
 
 Para recuperar o acesso a uma viagem antiga ou autorizar explicitamente sua coleção no modelo novo, utilize **a viagem existente**, sem criar uma cópia. Configure `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (ou a chave legada `SUPABASE_SERVICE_ROLE_KEY`) e `APP_URL` em um arquivo local `.env.owner`. Para recuperar apenas a viagem:
 
@@ -60,14 +66,25 @@ A seleção de viagem fica no endereço e no dispositivo, sem forçar a troca em
 
 ## Acesso privado em vários aparelhos
 
-A ação de compartilhamento oferece dois escopos diferentes:
+A ação de compartilhamento oferece três escopos:
 
-1. **Somente esta viagem:** permite consultar e editar essa viagem, incluindo quando estiver passada ou arquivada.
+Na tela **Minhas viagens**, use **Compartilhar todas** para criar um único convite que inclui todas as viagens que esta identidade possui, mesmo em coleções diferentes, e as que ela criar depois. Para limitar o acesso, abra uma viagem e clique em **Gerar convite** ou use essa ação no menu de três pontos do cartão. Use **Copiar link** ou **Compartilhar link** para abrir o convite no outro aparelho. A lista de convites aguardando uso permite desativar links ainda disponíveis.
+
+1. **Todas as viagens:** inclui as viagens atuais e futuras que a identidade proprietária criar em qualquer coleção.
 2. **Coleção:** autoriza explicitamente as viagens atuais e futuras dessa coleção.
+3. **Somente esta viagem:** permite consultar e editar essa viagem, incluindo quando estiver passada ou arquivada.
 
-Somente proprietários do escopo correspondente geram ou revogam convites. Convites comuns autorizam membros, expiram em 24 horas e têm um uso. A interface permite revogar convites ainda não utilizados; revogar um convite não remove uma autorização já concedida. A remoção de membros é administrativa nesta etapa. Limpar a sessão do navegador perde a identidade daquele aparelho: será necessário um novo convite para recuperar viagens compartilhadas. Outra sessão anônima não é presumida como sendo da mesma pessoa.
+Convites autorizam membros, expiram em 24 horas e têm um uso. Só a identidade que criou um convite para todas as viagens pode listá-lo ou desativá-lo; revogar um convite pendente não remove um acesso já aceito. A remoção de membros é administrativa nesta etapa. O escopo global acompanha a identidade anônima proprietária: limpar a sessão do aparelho que criou as viagens troca essa identidade, e viagens novas nessa outra sessão não entram automaticamente no convite antigo. Uma sessão anônima diferente nunca é presumida como sendo a mesma pessoa.
 
 Todas as leituras e gravações validam a sessão no Supabase. RLS isola viagens, atividades, gastos e coleções. As funções SQL usam `search_path` vazio e verificam versões, valores, vínculo de atividade à mesma viagem e permissões. Não há escrita pública direta nas tabelas. Criar uma viagem e sua autorização ocorre na mesma transação. Registros de atividades e gastos não podem ser transferidos alterando `trip_id`.
+
+### Hospedagem no Render
+
+Publique como **Web Service**, com build `npm ci && npm run build` e inicialização `npm start`. Configure `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` no ambiente do serviço antes do build e habilite Anonymous Sign-Ins no projeto Supabase. Depois de alterar código ou variáveis públicas, faça um novo deploy.
+
+Referência: [publicar um aplicativo Next.js no Render](https://render.com/docs/deploy-nextjs-app). O script `npm start` escuta em `0.0.0.0` e o Next usa a variável `PORT` fornecida pelo Render.
+
+Os convites usam o endereço em que o aplicativo está aberto: no Render, o link usa `https://SEU_SERVICO.onrender.com` ou o domínio próprio acessado. O botão não depende de `NEXT_PUBLIC_APP_URL` e não reutiliza um endereço de localhost da configuração. Para convidar outro aparelho, gere o link no site publicado. Os tokens ficam no fragmento do link e apenas na memória do formulário; ao aceitar, o aplicativo remove o token do endereço e mantém a autorização da sessão. A migração `202610120003_convite_todas_viagens.sql` precisa estar aplicada no Supabase para compartilhar todas as viagens.
 
 ## Planejamento e gastos
 
@@ -110,7 +127,7 @@ npm run build
 npm run test:app
 ```
 
-Os testes de banco executam migrações reais em PostgreSQL local com PGlite. Verificam RLS, reexecução preservando registros e permissões, criação atômica, convites de viagem e coleção, idempotência, arquivamento, isolamento, transferências bloqueadas, centavos e conflitos. Não usam banco de produção.
+Os testes de banco executam migrações reais em PostgreSQL local com PGlite. Verificam RLS, reexecução preservando registros e permissões, criação atômica, convites de viagem, coleção e identidade inteira, acesso automático a viagens futuras, idempotência, arquivamento, isolamento, transferências bloqueadas, centavos e conflitos. Não usam banco de produção.
 
 O teste de aplicativo compila em `.next-test`, usa uma simulação HTTP do Supabase exclusivamente em memória e Chrome instalado. Verifica os fluxos da interface, vários contextos de navegador, formulários, troca de viagem, indicadores e consulta offline. Registros fictícios existem somente nessa simulação. As capturas ficam em `artifacts/`. `npm run test:ui` faz uma verificação da interface sem backend configurado.
 
@@ -126,6 +143,8 @@ Antes de uso real, aplique 006 e 007 no Supabase, publique a aplicação com as 
 - `scripts/provision-owner.mjs`: recuperação explícita de propriedade da viagem ou coleção.
 
 **Atualização de múltiplas viagens pendente:** aplique `202610080006_multiplas_viagens.sql` depois de 005 e aguarde a atualização do schema da Data API.
+
+**Convite para todas as viagens pendente:** aplique `202610120003_convite_todas_viagens.sql` no SQL Editor do Supabase para habilitar o botão **Compartilhar todas** e aguarde a atualização do schema da Data API.
 
 **Observações de atividade pendentes:** aplique `202610120001_observacao_atividade.sql` depois de 006 e aguarde a atualização do schema da Data API.
 
