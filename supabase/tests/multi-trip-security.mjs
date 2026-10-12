@@ -21,6 +21,9 @@ const legacyExpense = '40000000-0000-4000-8000-000000000101';
 const secondTrip = '20000000-0000-4000-8000-000000000103';
 const crossCollectionTrip = '20000000-0000-4000-8000-000000000114';
 const siteFutureTrip = '20000000-0000-4000-8000-000000000115';
+const deletionTrip = '20000000-0000-4000-8000-000000000116';
+const deletionActivity = '30000000-0000-4000-8000-000000000116';
+const deletionExpense = '40000000-0000-4000-8000-000000000116';
 let collectionId;
 let second;
 async function as(role, user = '') {
@@ -45,6 +48,8 @@ const migrationUrl = new URL('../migrations/202610080006_multiplas_viagens.sql',
 const activityObservationMigrationUrl = new URL('../migrations/202610120001_observacao_atividade.sql', import.meta.url);
 const activityTypeMigrationUrl = new URL('../migrations/202610120002_reparar_tipo_atividade.sql', import.meta.url);
 const siteInviteMigrationUrl = new URL('../migrations/202610120003_convite_todas_viagens.sql', import.meta.url);
+const siteInviteRepairMigrationUrl = new URL('../migrations/202610120004_reparar_acesso_convite_site.sql', import.meta.url);
+const tripDeletionMigrationUrl = new URL('../migrations/202610120005_excluir_viagem.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -251,10 +256,15 @@ test('site invitation authorizes current and future owner trips across collectio
 
   await as('authenticated', siteDevice);
   assert.equal((await row('select public.redeem_site_invite($1) as id', [invite.token])).id, owner);
-  assert.equal((await row('select public.redeem_site_invite($1) as id', [invite.token])).id, owner, 'same identity can safely reopen its accepted invite');
   await as('postgres');
   assert.equal((await row('select count(*)::int as n from public.site_members where owner_id=$1 and member_id=$2', [owner, siteDevice])).n, 1);
+  assert.equal((await row('select count(*)::int as n from public.trip_members where user_id=$1', [siteDevice])).n, 0,
+    'the old site invitation migration does not yet materialize trip rows');
+  await db.exec(await readFile(siteInviteRepairMigrationUrl, 'utf8'));
+  assert.equal((await row('select count(*)::int as n from public.trip_members where user_id=$1 and role=\'member\'', [siteDevice])).n, 4,
+    'the repair migration backfills every existing trip owned by the inviter');
   await as('authenticated', siteDevice);
+  assert.equal((await row('select public.redeem_site_invite($1) as id', [invite.token])).id, owner, 'same identity can safely reopen its accepted invite');
   assert.equal((await row('select private.is_trip_member($1) as yes', [legacyTrip])).yes, true);
   const visible = await rows('select id,trip_role from public.list_authorized_trips()');
   assert.deepEqual(visible.map(item => item.id).sort(), [legacyTrip, secondTrip, '20000000-0000-4000-8000-000000000113', crossCollectionTrip].sort());
@@ -269,6 +279,9 @@ test('site invitation authorizes current and future owner trips across collectio
   await as('authenticated', owner);
   const future = await create({ id: siteFutureTrip, collection: null, name: 'Viagem criada depois do convite' });
   assert.notEqual(future.collection_id, crossCollection.collection_id);
+  await as('postgres');
+  assert.equal((await row('select role from public.trip_members where trip_id=$1 and user_id=$2', [future.id, siteDevice])).role, 'member',
+    'new owner trips automatically receive a site member row');
   await as('authenticated', siteDevice);
   assert.equal((await rows('select * from public.trips where id=$1', [future.id])).length, 1, 'future owner trips are automatically included even in a new collection');
   assert.ok((await rows('select * from public.list_authorized_trips()')).some(item => item.id === future.id));
@@ -286,7 +299,10 @@ test('site invitation authorizes current and future owner trips across collectio
   await assert.rejects(db.query('select public.redeem_site_invite($1)', [revoked.token]), /INVITE_REVOKED/);
   await as('postgres');
   await db.exec(await readFile(siteInviteMigrationUrl, 'utf8'));
+  await db.exec(await readFile(siteInviteRepairMigrationUrl, 'utf8'));
   assert.equal((await rows('select owner_id,member_id from public.site_members')).length, 1, 're-running the migration preserves the accepted site authorization without duplicating it');
+  assert.equal((await row('select count(*)::int as n from public.trip_members where user_id=$1 and role=\'member\'', [siteDevice])).n, 5,
+    're-running the repair preserves existing and future trip access without duplicates');
 });
 
 test('collection invite tokens are hashed, owner-only, bounded, revocable and expiry aware', async () => {
@@ -390,4 +406,34 @@ test('explicit service-only collection recovery does not reinterpret a trip reco
   assert.equal((await row('select count(*)::int as n from public.trips')).n,retained);
   await as('authenticated',tripOnlyDevice);
   assert.equal((await rows('select * from public.list_authorized_collections()')).length,0);
+});
+
+test('trip deletion is owner-only, version-checked and cascades all trip records', async () => {
+  await as('postgres');
+  await db.exec(await readFile(tripDeletionMigrationUrl, 'utf8'));
+  await as('authenticated', owner);
+  const target = await create({ id: deletionTrip, name: 'Viagem para excluir', budget: 90000 });
+  await saveActivity(target.id, deletionActivity, 3000, 'Refeição');
+  await spend(target.id, deletionExpense, 2500, deletionActivity);
+  await row("select * from public.create_trip_invite($1,'member')", [target.id]);
+
+  await as('authenticated', collectionMember);
+  await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version]), /ACCESS_DENIED/,
+    'a collection member cannot delete another owner’s trip');
+  await as('authenticated', siteDevice);
+  await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version]), /ACCESS_DENIED/,
+    'site-wide members can read but cannot delete the owner’s trip');
+  await as('authenticated', owner);
+  await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version + 1]), /VERSION_CONFLICT/,
+    'a stale list entry cannot delete a newer trip version');
+  await db.query('select public.delete_trip($1,$2)', [target.id, target.version]);
+
+  await as('postgres');
+  assert.equal((await row('select count(*)::int as n from public.trips where id=$1', [target.id])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.trip_members where trip_id=$1', [target.id])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.activities where trip_id=$1', [target.id])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where trip_id=$1', [target.id])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.trip_invites where trip_id=$1', [target.id])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.trip_collections where id=$1', [target.collection_id])).n, 1,
+    'deleting one trip keeps its collection available for other trips');
 });

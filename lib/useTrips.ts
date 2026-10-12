@@ -192,6 +192,15 @@ export function useTrips(options: { search?: string; filter?: TripListFilter } =
     const updated = normalizeTrip((Array.isArray(result.data) ? result.data[0] : result.data) as Trip);
     updateCachedTrip(updated); await refreshAfterWrite(); return updated;
   }
+  async function deleteTrip(selectedTrip: TripCard): Promise<void> {
+    await requireWrite();
+    const result = await getSupabase().rpc('delete_trip', { p_id: selectedTrip.id, p_expected_version: selectedTrip.version });
+    if (result.error) failWrite(result.error, selectedTrip.id);
+    if (userRef.current) clearSnapshot(userRef.current, selectedTrip.id);
+    rowsRef.current = rowsRef.current.filter(item => item.id !== selectedTrip.id);
+    setTrips(rowsRef.current);
+    await refreshAfterWrite();
+  }
   async function updateTrip(values: TripInput, selectedTrip: Trip): Promise<Trip> {
     const valid = validateTripInput(values);
     await requireWrite();
@@ -200,5 +209,5 @@ export function useTrips(options: { search?: string; filter?: TripListFilter } =
     const updated = normalizeTrip((Array.isArray(result.data) ? result.data[0] : result.data) as Trip);
     updateCachedTrip(updated); await refreshAfterWrite(); return updated;
   }
-  return { trips, collections, status, error, online, syncedAt, offlinePartial, hasMore, loadingMore, invitedTripId, refresh, loadMore, createTrip, archiveTrip, setArchived: archiveTrip, updateTrip };
+  return { trips, collections, status, error, online, syncedAt, offlinePartial, hasMore, loadingMore, invitedTripId, refresh, loadMore, createTrip, archiveTrip, deleteTrip, setArchived: archiveTrip, updateTrip };
 }

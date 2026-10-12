@@ -40,6 +40,14 @@ A migração encerra o acesso automático de qualquer visitante do modelo 003. O
 
 A migração de compartilhamento cria convites privados para todas as viagens pertencentes à identidade atual e às viagens futuras criadas por ela, inclusive em outras coleções. Cada convite autoriza um aparelho e não concede propriedade. O token é armazenado somente como hash, e as tabelas de convites e membros não podem ser consultadas diretamente pelos aparelhos.
 
+**`202610120004_reparar_acesso_convite_site.sql`**
+
+Depois de `202610120003_convite_todas_viagens.sql`, aplique esta atualização para registrar o acesso compartilhado nas associações de cada viagem. Ela também recupera automaticamente convites já aceitos, sem exigir que a pessoa gere um novo link. Viagens criadas depois do convite recebem a mesma associação automaticamente.
+
+**`202610120005_excluir_viagem.sql`**
+
+Esta migração habilita a exclusão permanente de uma viagem pelo proprietário. A exclusão remove cronograma, gastos, convites e vínculos daquela viagem em cascata, mas preserva a coleção para outras viagens.
+
 Para recuperar o acesso a uma viagem antiga ou autorizar explicitamente sua coleção no modelo novo, utilize **a viagem existente**, sem criar uma cópia. Configure `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (ou a chave legada `SUPABASE_SERVICE_ROLE_KEY`) e `APP_URL` em um arquivo local `.env.owner`. Para recuperar apenas a viagem:
 
 ```powershell
@@ -144,7 +152,9 @@ Antes de uso real, aplique 006 e 007 no Supabase, publique a aplicação com as 
 
 **Atualização de múltiplas viagens pendente:** aplique `202610080006_multiplas_viagens.sql` depois de 005 e aguarde a atualização do schema da Data API.
 
-**Convite para todas as viagens pendente:** aplique `202610120003_convite_todas_viagens.sql` no SQL Editor do Supabase para habilitar o botão **Compartilhar todas** e aguarde a atualização do schema da Data API.
+**Convite para todas as viagens pendente:** aplique `202610120003_convite_todas_viagens.sql` e depois `202610120004_reparar_acesso_convite_site.sql` no SQL Editor do Supabase; aguarde a atualização do schema da Data API.
+
+**Exclusão de viagem pendente:** aplique `202610120005_excluir_viagem.sql` no SQL Editor do Supabase e aguarde a atualização do schema da Data API.
 
 **Observações de atividade pendentes:** aplique `202610120001_observacao_atividade.sql` depois de 006 e aguarde a atualização do schema da Data API.
 

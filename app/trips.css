@@ -33,6 +33,7 @@
 .trip-card-menu summary::-webkit-details-marker{display:none}.trip-card-menu summary:hover,.trip-card-menu[open] summary{background:#EBF3F4}.trip-card-menu summary:focus-visible{outline:3px solid #125E67;outline-offset:3px}
 .trip-card-menu>div{position:absolute;right:0;top:44px;min-width:190px;z-index:10;padding:6px;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px #125E6718;background:#fff}
 .trip-card-menu button{display:flex;gap:10px;align-items:center;width:100%;min-height:44px;padding:11px;color:var(--ink);background:transparent;border:0;text-align:left;font-size:14px;border-radius:8px}.trip-card-menu button:hover{background:#EBF3F4}
+.trip-card-menu button.menu-danger{color:#A43F56}.trip-card-menu button.menu-danger:hover{background:#FBEFF2}
 .trips-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:16px;padding:52px 28px;background:#fff;border-style:dashed}
 .trips-empty .section-icon{width:56px;height:56px;border-radius:18px}.trips-empty h2{font-size:28px;line-height:1.2;letter-spacing:-.8px;font-weight:650;margin:4px 0 0}
 .trips-empty p{max-width:52ch;font-size:15px;color:var(--muted);line-height:1.8;margin:0}.trips-empty .button-primary{margin-top:8px}

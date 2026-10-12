@@ -220,6 +220,17 @@ const fixture = createServer(async (request, response) => {
       if(target.version!==input.p_expected_version) { deny(response,'VERSION_CONFLICT','40001',409); return; }
       target.archived_at=input.p_archived?target.archived_at??now():null; target.version++; target.updated_at=now(); respond(response,{...target}); return;
     }
+    if(rpc==='delete_trip') {
+      const target=trips.get(input.p_id);
+      if(!target||tripRole(user.id,target.id)!=='owner') { deny(response); return; }
+      if(target.version!==input.p_expected_version) { deny(response,'VERSION_CONFLICT','40001',409); return; }
+      trips.delete(target.id);
+      for(const [id,item] of activities) if(item.trip_id===target.id) activities.delete(id);
+      for(const [id,item] of expenses) if(item.trip_id===target.id) expenses.delete(id);
+      for(const [key,item] of memberships) if(item.trip_id===target.id) memberships.delete(key);
+      for(let index=invitations.length-1;index>=0;index--) if(invitations[index].scope==='trip'&&invitations[index].target===target.id) invitations.splice(index,1);
+      respond(response,null); return;
+    }
     if (rpc === 'save_activity') {
       if (!tripRole(user.id,input.p_trip_id)) { deny(response); return; }
       if (!['Refeição','Lazer','Atividade'].includes(input.p_type)) { deny(response,'INVALID_ACTIVITY_TYPE','22023',400); return; }
@@ -1049,6 +1060,9 @@ try {
   assert.equal(new URL(siteDevice.page.url()).hash,'');
   assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de outra coleção'}).count(),1,'the same invite includes a current trip from another collection');
   assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).getByRole('button',{name:'Gerar convite',exact:true}).count(),0,'site members cannot invite others through an owner-only trip action');
+  const sharedTripCard=siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de teste'});
+  await sharedTripCard.locator('.trip-card-menu summary').click();
+  assert.equal(await sharedTripCard.getByRole('button',{name:'Excluir viagem',exact:true}).count(),0,'site members cannot delete an owner’s trip');
   passed('O botão da tela inicial cria um convite para a identidade inteira e inclui viagens existentes em coleções diferentes.');
 
   await navigate(owner.page,'Nova viagem');
@@ -1159,6 +1173,26 @@ try {
   assert.equal(await member.page.locator('.trip-card').count(),1);
   assert.equal(await member.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
   passed('A revogação interrompe o acesso e limpa a cópia privada; a lista offline indica o histórico parcial disponível neste aparelho.');
+
+  await owner.page.goto(`${appOrigin}/viagens`);
+  await owner.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
+  const deletionCard=owner.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'});
+  await deletionCard.locator('.trip-card-menu summary').click();
+  await deletionCard.getByRole('button',{name:'Excluir viagem',exact:true}).click();
+  const deleteDialog=owner.page.getByRole('dialog',{name:'Excluir viagem e registros?'});
+  failedRpcs.set('delete_trip',{message:'Could not find the function public.delete_trip in the schema cache',code:'PGRST202',status:404});
+  await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
+  await visibleText(deleteDialog,/202610120005_excluir_viagem.sql/);
+  await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
+  await deleteDialog.waitFor({state:'hidden'});
+  await visibleText(owner.page,'Viagem excluída.');
+  await owner.page.waitForFunction(()=>![...document.querySelectorAll('.trip-card')].some(card=>card.textContent.includes('Memória da terceira viagem')));
+  await siteDevice.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await siteDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
+  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'}).count(),0,'deletion removes the trip from every shared device');
+  assert.equal(trips.has(tripC.id),false);
+  assert.equal([...expenses.values()].some(value=>value.trip_id===tripC.id),false);
+  passed('A exclusão exige confirmação, explica a migração pendente e remove a viagem e seus gastos também dos aparelhos compartilhados.');
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
 } catch (error) {
   console.error(error instanceof Error ? error.stack : 'Falha no teste de navegador.');

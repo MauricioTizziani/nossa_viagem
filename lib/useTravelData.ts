@@ -13,6 +13,7 @@ export const EXPENSES_MIGRATION = '202610080004_gastos.sql';
 export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';
 export const SITE_INVITE_MIGRATION = '202610120003_convite_todas_viagens.sql';
+export const TRIP_DELETE_MIGRATION = '202610120005_excluir_viagem.sql';
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''; }
 function messageOf(error: unknown): string { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 function isMissingExpensesSchema(error: unknown): boolean {
@@ -32,6 +33,7 @@ export function friendlyError(error: unknown): string {
   if (message.includes('ACTIVITY_MIGRATION_PENDING') || isMissingActivitySchema(error)) return `Falta aplicar a atualização das atividades no Supabase: ${ACTIVITY_MIGRATION}.`;
   if (/INVALID_INVITE|INVITE_EXPIRED|INVITE_REVOKED|INVITE_EXHAUSTED|INVITE_USED/.test(message)) return 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.';
   if (message.includes('SITE_INVITE_MIGRATION_PENDING') || (['PGRST202', 'PGRST205', '42883'].includes(errorCode(error)) && /site_invite|site_members/.test(message))) return `Falta aplicar a atualização de compartilhamento no Supabase: ${SITE_INVITE_MIGRATION}.`;
+  if (message.includes('TRIP_DELETE_MIGRATION_PENDING') || (['PGRST202', 'PGRST205', '42883'].includes(errorCode(error)) && /delete_trip/.test(message))) return `Falta aplicar a atualização para excluir viagens no Supabase: ${TRIP_DELETE_MIGRATION}.`;
   if (message.includes('EXPENSES_MIGRATION_PENDING') || isMissingExpensesSchema(error)) return `Falta aplicar a atualização de gastos no Supabase: ${EXPENSES_MIGRATION}.`;
   if (message.includes('BUDGET_MIGRATION_PENDING') || message.includes('INVALID_INITIAL_BUDGET') || (errorCode(error) === 'PGRST202' && /update_trip/.test(message) && /initial_budget|touch_budget/.test(message))) return message.includes('INVALID_INITIAL_BUDGET') ? 'Informe um orçamento inicial válido e não negativo.' : `Falta aplicar a atualização de orçamento inicial no Supabase: ${BUDGET_MIGRATION}.`;
   if (['PGRST202', 'PGRST205', '42P01', '42883'].includes(errorCode(error)) && /list_authorized|create_private_trip|set_trip_archived|collection_invite|trip_invite|collection_id|archived_at/.test(message)) return `Falta aplicar a atualização de múltiplas viagens no Supabase: ${MULTI_TRIP_MIGRATION}.`;
