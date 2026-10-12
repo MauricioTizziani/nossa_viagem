@@ -24,9 +24,11 @@ Variáveis públicas entram no navegador. Segredos administrativos ficam exclusi
 
 ## Atualização do banco e preservação dos dados
 
-Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique as migrações de `supabase/migrations/` na ordem 001 a 007. Em um banco atualizado até 005, aplique 006 e depois 007. Se já estiver atualizado até 006, aplique somente:
+Faça uma cópia de segurança do banco antes de aplicar migrações em produção. Em uma instalação nova, aplique as migrações de `supabase/migrations/` na ordem 001 a 008. Em um banco atualizado até 005, aplique 006, 007 e 008. Se já estiver atualizado até 006, aplique 007 e 008. Se já estiver atualizado até 007, aplique somente:
 
-**`202610120001_observacao_atividade.sql`**
+**`202610120002_reparar_tipo_atividade.sql`**
+
+Essa migração reestabelece a validação do banco com os tipos usados pelo formulário: `Refeição`, `Lazer` e `Atividade`. Ela não altera atividades existentes; se encontrar um tipo antigo diferente desses valores, interrompe sem modificar os dados para permitir revisão.
 
 Essa migração preserva os identificadores, períodos, valores, atividades, gastos, lugares, vínculos e membros existentes. Cada viagem antiga recebe uma coleção privada. Todas as autorizações antigas, inclusive de proprietários, continuam restritas às viagens que já podiam acessar. O acesso à coleção exige uma autorização explícita; convites antigos de proprietário também não ampliam esse escopo. Uma reexecução não duplica registros nem promove convites de uma viagem para toda a coleção.
 

@@ -8,6 +8,7 @@ import { readAllPages, responseBelongsToRequest } from './dataQueries';
 
 export const emptyTrip: Trip = { id: '', name: '', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: null, archived_at: null, version: 1 };
 export const ACTIVITY_MIGRATION = '202610120001_observacao_atividade.sql';
+export const ACTIVITY_TYPE_MIGRATION = '202610120002_reparar_tipo_atividade.sql';
 export const EXPENSES_MIGRATION = '202610080004_gastos.sql';
 export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';
@@ -25,6 +26,7 @@ export function friendlyError(error: unknown): string {
   if (message.includes('SYNC_BUSY')) return 'Esta viagem está recebendo alterações em outro aparelho. Atualize os dados novamente para carregar os totais completos.';
   if (message.includes('VERSION_CONFLICT')) return 'Esta informação mudou em outro aparelho. Carregue a versão atual antes de salvar novamente.';
   if (message.includes('INVALID_ACTIVITY_TYPE')) return 'Escolha Refeição, Lazer ou Atividade para esta atividade.';
+  if (errorCode(error) === '23514' && /activities_type_check/i.test(message)) return `A validação de tipos do banco está desatualizada. Aplique ${ACTIVITY_TYPE_MIGRATION} no Supabase e tente novamente.`;
   if (message.includes('ACCESS_DENIED')) return 'Este aparelho não tem mais acesso a esta viagem. Abra Minhas viagens para ver as viagens autorizadas.';
   if (message.includes('ACTIVITY_MIGRATION_PENDING') || isMissingActivitySchema(error)) return `Falta aplicar a atualização das atividades no Supabase: ${ACTIVITY_MIGRATION}.`;
   if (/INVALID_INVITE|INVITE_EXPIRED|INVITE_REVOKED|INVITE_EXHAUSTED|INVITE_USED/.test(message)) return 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.';

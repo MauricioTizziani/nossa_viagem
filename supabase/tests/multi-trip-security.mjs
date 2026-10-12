@@ -40,6 +40,7 @@ async function spend(trip, id, amount = 5000, activity = null) {
 }
 const migrationUrl = new URL('../migrations/202610080006_multiplas_viagens.sql', import.meta.url);
 const activityObservationMigrationUrl = new URL('../migrations/202610120001_observacao_atividade.sql', import.meta.url);
+const activityTypeMigrationUrl = new URL('../migrations/202610120002_reparar_tipo_atividade.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -87,6 +88,27 @@ test('incremental migration preserves IDs, data, budgets and original authorizat
   assert.equal((await rows('select * from public.list_authorized_collections()')).length,0,'an old owner invite never gains broader collection access');
   assert.equal((await row('select private.is_trip_owner($1) as yes',[legacyTrip])).yes,true);
   assert.equal((await row('select * from public.list_authorized_trips()')).collection_role,null);
+});
+
+test('activity type repair restores Refeição and preserves existing activities', async () => {
+  await as('postgres');
+  await db.exec(`alter table public.activities drop constraint activities_type_check;
+    alter table public.activities add constraint activities_type_check check (type in ('Refeicao', 'Lazer', 'Atividade'));`);
+  await assert.rejects(db.exec(`insert into public.activities(id,trip_id,starts_at,name,type)
+    values('50000000-0000-4000-8000-000000000109','${legacyTrip}',now(),'Teste isolado','Refeição')`), /activities_type_check/);
+
+  const migration = await readFile(activityTypeMigrationUrl, 'utf8');
+  await db.exec(migration);
+  await db.exec(migration);
+  assert.equal((await row('select type from public.activities where id=$1', [legacyActivity])).type, 'Lazer');
+  const constraint = await row(`select pg_get_constraintdef(oid) as definition
+    from pg_catalog.pg_constraint
+    where conrelid='public.activities'::regclass and conname='activities_type_check'`);
+  assert.match(constraint.definition, /Refeição/);
+
+  await as('authenticated', owner);
+  const saved = await saveActivity(legacyTrip, '50000000-0000-4000-8000-000000000109', 10000, 'Refeição');
+  assert.equal(saved.type, 'Refeição');
 });
 
 test('activity saves accept each canonical schedule type and persist optional multiline observations', async () => {
