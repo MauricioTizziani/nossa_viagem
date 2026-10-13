@@ -213,6 +213,13 @@ export function useTravelData(tripId: string) {
     const result = await getSupabase().rpc('delete_expense', { p_id: expense.id, p_expected_version: expense.version });
     if (result.error) failWrite(result.error); await afterWrite();
   }
+  async function deleteTrip() {
+    requireWrite();
+    if (role !== 'owner') throw new Error('ACCESS_DENIED');
+    const result = await getSupabase().rpc('delete_trip', { p_id: tripId, p_expected_version: trip.version });
+    if (result.error) failWrite(result.error);
+    if (userRef.current) clearSnapshot(userRef.current, tripId);
+  }
   async function updateTrip(values: Omit<Trip, 'id' | 'version'>, expectedVersion: number, options: { touchBudget: boolean }) {
     requireWrite();
     const base = { p_id: tripId, p_expected_version: expectedVersion, p_name: values.name, p_destination: values.destination, p_start_date: values.start_date, p_end_date: values.end_date, p_timezone: values.timezone, p_person_one: values.person_one, p_person_two: values.person_two };
@@ -236,5 +243,5 @@ export function useTravelData(tripId: string) {
   // Hide the previous route synchronously, before the next effect or request can run.
   const selected = trip.id === tripId;
   return { trip: selected ? trip : emptyTrip, activities: selected ? activities : [], expenses: selected ? expenses : [], expensesReady: selected && expensesReady, role: selected ? role : 'member' as AccessRole, collectionRole: selected ? collectionRole : null,
-    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip };
+    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, deleteTrip, updateTrip, latestActivity, latestExpense, latestTrip };
 }
