@@ -52,6 +52,10 @@ Esta migração habilita a exclusão permanente de uma viagem. A exclusão remov
 
 Esta atualização permite que qualquer pessoa autorizada a acessar uma viagem também possa compartilhar ou excluir essa viagem. Participantes podem criar convites somente para essa viagem, sem conceder propriedade, e podem desativar apenas os convites que criaram. Responsáveis continuam podendo administrar todos os convites da viagem.
 
+**`202610120007_excluir_viagem_compartilhada.sql`**
+
+Esta atualização corrige a exclusão de viagens antigas que ainda são referenciadas pelo vínculo interno do compartilhamento anterior. Ao excluir uma dessas viagens, o vínculo obsoleto também é removido.
+
 Para recuperar o acesso a uma viagem antiga ou autorizar explicitamente sua coleção no modelo novo, utilize **a viagem existente**, sem criar uma cópia. Configure `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (ou a chave legada `SUPABASE_SERVICE_ROLE_KEY`) e `APP_URL` em um arquivo local `.env.owner`. Para recuperar apenas a viagem:
 
 ```powershell
@@ -159,6 +163,8 @@ Antes de uso real, aplique 006 e 007 no Supabase, publique a aplicação com as 
 **Convite para todas as viagens pendente:** aplique `202610120003_convite_todas_viagens.sql` e depois `202610120004_reparar_acesso_convite_site.sql` no SQL Editor do Supabase; aguarde a atualização do schema da Data API.
 
 **Compartilhamento e exclusão por participantes pendentes:** aplique `202610120006_acoes_viagem_participantes.sql` no SQL Editor do Supabase e aguarde a atualização do schema da Data API.
+
+**Exclusão de viagem antiga bloqueada por `shared_trip_trip_id_fkey`:** aplique `202610120007_excluir_viagem_compartilhada.sql` no SQL Editor do Supabase e aguarde a atualização do banco. A atualização remove o vínculo legado automaticamente junto com a viagem.
 
 **Observações de atividade pendentes:** aplique `202610120001_observacao_atividade.sql` depois de 006 e aguarde a atualização do schema da Data API.
 

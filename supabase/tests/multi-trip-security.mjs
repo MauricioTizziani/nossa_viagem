@@ -51,6 +51,7 @@ const siteInviteMigrationUrl = new URL('../migrations/202610120003_convite_todas
 const siteInviteRepairMigrationUrl = new URL('../migrations/202610120004_reparar_acesso_convite_site.sql', import.meta.url);
 const tripDeletionMigrationUrl = new URL('../migrations/202610120005_excluir_viagem.sql', import.meta.url);
 const tripMemberActionsMigrationUrl = new URL('../migrations/202610120006_acoes_viagem_participantes.sql', import.meta.url);
+const tripDeletionSharedReferenceMigrationUrl = new URL('../migrations/202610120007_excluir_viagem_compartilhada.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -446,4 +447,24 @@ test('authorized members can share and delete a trip, with invite ownership and 
   assert.equal((await row('select count(*)::int as n from public.trip_invites where trip_id=$1', [target.id])).n, 0);
   assert.equal((await row('select count(*)::int as n from public.trip_collections where id=$1', [target.collection_id])).n, 1,
     'deleting one trip keeps its collection available for other trips');
+});
+
+test('deleting a legacy shared trip removes its obsolete pointer instead of failing on a foreign key', async () => {
+  await as('authenticated', tripMember);
+  const target = await row('select version from public.trips where id=$1', [legacyTrip]);
+  assert.ok(target, 'the original shared trip still exists');
+  await assert.rejects(db.query('select public.delete_trip($1,$2)', [legacyTrip, target.version]), /shared_trip_trip_id_fkey/,
+    'reproduces the foreign-key failure against the original shared-trip pointer');
+
+  await as('postgres');
+  await db.exec(await readFile(tripDeletionSharedReferenceMigrationUrl, 'utf8'));
+  await as('authenticated', tripMember);
+  await db.query('select public.delete_trip($1,$2)', [legacyTrip, target.version]);
+
+  await as('postgres');
+  assert.equal((await row('select count(*)::int as n from public.trips where id=$1', [legacyTrip])).n, 0);
+  assert.equal((await row('select count(*)::int as n from private.shared_trip where trip_id=$1', [legacyTrip])).n, 0,
+    'the obsolete pointer is removed by the trip deletion');
+  assert.equal((await row('select count(*)::int as n from public.activities where trip_id=$1', [legacyTrip])).n, 0);
+  assert.equal((await row('select count(*)::int as n from public.trip_expenses where trip_id=$1', [legacyTrip])).n, 0);
 });

@@ -1190,6 +1190,9 @@ try {
   await deletionCard.locator('.trip-card-menu summary').click();
   await deletionCard.getByRole('button',{name:'Excluir viagem',exact:true}).click();
   const deleteDialog=siteDevice.page.getByRole('dialog',{name:'Excluir viagem e registros?'});
+  failedRpcs.set('delete_trip',{message:'update or delete on table "trips" violates foreign key constraint "shared_trip_trip_id_fkey" on table "shared_trip"',code:'23503',status:409});
+  await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
+  await visibleText(deleteDialog,/202610120007_excluir_viagem_compartilhada.sql/);
   failedRpcs.set('delete_trip',{message:'ACCESS_DENIED',code:'42501',status:403});
   await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
   await visibleText(deleteDialog,/202610120006_acoes_viagem_participantes.sql/);

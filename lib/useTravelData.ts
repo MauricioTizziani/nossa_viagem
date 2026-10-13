@@ -15,6 +15,7 @@ export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';
 export const SITE_INVITE_MIGRATION = '202610120003_convite_todas_viagens.sql';
 export const TRIP_DELETE_MIGRATION = '202610120005_excluir_viagem.sql';
 export const TRIP_MEMBER_ACTIONS_MIGRATION = '202610120006_acoes_viagem_participantes.sql';
+export const TRIP_DELETE_SHARED_REFERENCE_MIGRATION = '202610120007_excluir_viagem_compartilhada.sql';
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''; }
 function messageOf(error: unknown): string { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 function isMissingExpensesSchema(error: unknown): boolean {
@@ -32,6 +33,7 @@ export function friendlyError(error: unknown): string {
   if (errorCode(error) === '23514' && /activities_type_check/i.test(message)) return `A validação de tipos do banco está desatualizada. Aplique ${ACTIVITY_TYPE_MIGRATION} no Supabase e tente novamente.`;
   if (message.includes('ACCESS_DENIED')) return 'Este aparelho não tem mais acesso a esta viagem. Abra Minhas viagens para ver as viagens autorizadas.';
   if (message.includes('TRIP_MEMBER_ACTIONS_MIGRATION_PENDING')) return `Falta aplicar a atualização de permissões no Supabase: ${TRIP_MEMBER_ACTIONS_MIGRATION}.`;
+  if (errorCode(error) === '23503' && /shared_trip/i.test(message)) return `Falta aplicar a atualização para excluir viagens antigas no Supabase: ${TRIP_DELETE_SHARED_REFERENCE_MIGRATION}.`;
   if (message.includes('ACTIVITY_MIGRATION_PENDING') || isMissingActivitySchema(error)) return `Falta aplicar a atualização das atividades no Supabase: ${ACTIVITY_MIGRATION}.`;
   if (/INVALID_INVITE|INVITE_EXPIRED|INVITE_REVOKED|INVITE_EXHAUSTED|INVITE_USED/.test(message)) return 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.';
   if (message.includes('SITE_INVITE_MIGRATION_PENDING') || (['PGRST202', 'PGRST205', '42883'].includes(errorCode(error)) && /site_invite|site_members/.test(message))) return `Falta aplicar a atualização de compartilhamento no Supabase: ${SITE_INVITE_MIGRATION}.`;
