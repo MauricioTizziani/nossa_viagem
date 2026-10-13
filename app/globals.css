@@ -4,18 +4,14 @@
 .trip-context-info { min-width:0; grid-column:1 / -1; grid-row:2; }
 .trip-context-actions { grid-column:1 / -1; display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
 .trip-context-actions .button-primary,.trip-context-actions .button-secondary { min-height:44px; }
-.trip-context-actions .trip-delete-action { color:#A43F56; border-color:#E9CBD5; }
-.trip-context-actions .trip-delete-action:hover { background:#FBEFF2; }
-.trip-owner-note { margin:0; color:#58787C; font-size:13px; line-height:1.6; }
 .trip-context strong { display:block; overflow-wrap:anywhere; font-size:16px; }
 .trip-context span { display:block; overflow-wrap:anywhere; font-size:14px; color:#4F7276; margin-top:4px; }
 .trip-history-note { margin-bottom:16px; display:flex; gap:10px; align-items:center; }
 @media(max-width:600px) {
   .trip-context { grid-template-columns:minmax(0,1fr); gap:10px; }
   .trip-context-info { grid-column:auto; grid-row:auto; }
-  .trip-context-actions { grid-column:auto; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .trip-context-actions { grid-column:auto; display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
   .trip-context-actions .button-primary,.trip-context-actions .button-secondary { min-width:0; padding:10px 8px; font-size:13px; white-space:normal; }
-  .trip-context-actions .trip-owner-note { grid-column:1 / -1; }
 }
 .invitation-content .invite-scope { margin:0; padding:0; border:0; display:flex; flex-direction:column; gap:10px; width:100%; }
 .invitation-content .invite-scope legend { font-size:14px; font-weight:650; margin-bottom:12px; }

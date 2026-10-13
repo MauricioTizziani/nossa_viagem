@@ -29,7 +29,7 @@
 .trip-card-money dd{font-size:19px;font-weight:650;letter-spacing:-.4px;margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .trip-card-money .undefined-budget{font-size:13px;line-height:1.6;font-weight:400;letter-spacing:0;color:var(--muted)}
 .trip-card-open{width:100%;justify-content:space-between;font-size:13px;min-height:46px;background:#EBF3F4;border-color:transparent}.trip-card-open:hover{background:#DDF0F2;border-color:#A7CFD3}
-.trip-card-menu{position:relative}.trip-card-menu summary{list-style:none;display:flex;align-items:center;justify-content:center;gap:5px;cursor:pointer;min-width:78px;height:40px;padding:0 10px;color:var(--muted);border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:600}
+.trip-card-menu{position:relative}.trip-card-menu summary{list-style:none;display:flex;align-items:center;justify-content:center;cursor:pointer;width:40px;height:40px;padding:0;color:var(--muted);border:1px solid var(--line);border-radius:9px}
 .trip-card-menu summary::-webkit-details-marker{display:none}.trip-card-menu summary:hover,.trip-card-menu[open] summary{background:#EBF3F4}.trip-card-menu summary:focus-visible{outline:3px solid #125E67;outline-offset:3px}
 .trip-card-menu>div{position:absolute;right:0;top:44px;min-width:190px;z-index:10;padding:6px;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px #125E6718;background:#fff}
 .trip-card-menu button{display:flex;gap:10px;align-items:center;width:100%;min-height:44px;padding:11px;color:var(--ink);background:transparent;border:0;text-align:left;font-size:14px;border-radius:8px}.trip-card-menu button:hover{background:#EBF3F4}

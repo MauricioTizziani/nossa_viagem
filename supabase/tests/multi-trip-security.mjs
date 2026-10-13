@@ -50,6 +50,7 @@ const activityTypeMigrationUrl = new URL('../migrations/202610120002_reparar_tip
 const siteInviteMigrationUrl = new URL('../migrations/202610120003_convite_todas_viagens.sql', import.meta.url);
 const siteInviteRepairMigrationUrl = new URL('../migrations/202610120004_reparar_acesso_convite_site.sql', import.meta.url);
 const tripDeletionMigrationUrl = new URL('../migrations/202610120005_excluir_viagem.sql', import.meta.url);
+const tripMemberActionsMigrationUrl = new URL('../migrations/202610120006_acoes_viagem_participantes.sql', import.meta.url);
 
 before(async () => {
   await db.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -408,22 +409,29 @@ test('explicit service-only collection recovery does not reinterpret a trip reco
   assert.equal((await rows('select * from public.list_authorized_collections()')).length,0);
 });
 
-test('trip deletion is owner-only, version-checked and cascades all trip records', async () => {
+test('authorized members can share and delete a trip, with invite ownership and deletion version checks', async () => {
   await as('postgres');
   await db.exec(await readFile(tripDeletionMigrationUrl, 'utf8'));
+  await db.exec(await readFile(tripMemberActionsMigrationUrl, 'utf8'));
   await as('authenticated', owner);
   const target = await create({ id: deletionTrip, name: 'Viagem para excluir', budget: 90000 });
   await saveActivity(target.id, deletionActivity, 3000, 'Refeição');
   await spend(target.id, deletionExpense, 2500, deletionActivity);
-  await row("select * from public.create_trip_invite($1,'member')", [target.id]);
+  const ownerInvite = await row("select * from public.create_trip_invite($1,'member')", [target.id]);
 
-  await as('authenticated', collectionMember);
-  await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version]), /ACCESS_DENIED/,
-    'a collection member cannot delete another owner’s trip');
   await as('authenticated', siteDevice);
-  await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version]), /ACCESS_DENIED/,
-    'site-wide members can read but cannot delete the owner’s trip');
-  await as('authenticated', owner);
+  assert.equal((await row('select private.is_trip_member($1) as yes', [target.id])).yes, true);
+  const memberInvite = await row("select * from public.create_trip_invite($1,'member')", [target.id]);
+  assert.equal(memberInvite.role, 'member');
+  await assert.rejects(db.query("select * from public.create_trip_invite($1,'owner')", [target.id]), /ACCESS_DENIED/,
+    'a member cannot grant trip ownership through an invitation');
+  const memberInvites = await rows('select * from public.list_trip_invites($1)', [target.id]);
+  assert.deepEqual(memberInvites.map(item => item.id), [memberInvite.invite_id],
+    'members see only the invitations they created');
+  await assert.rejects(db.query('select public.revoke_trip_invite($1)', [ownerInvite.invite_id]), /ACCESS_DENIED/,
+    'members cannot revoke another participant’s invitation');
+  await row('select public.revoke_trip_invite($1)', [memberInvite.invite_id]);
+  assert.equal((await rows('select * from public.list_trip_invites($1)', [target.id])).length, 0);
   await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version + 1]), /VERSION_CONFLICT/,
     'a stale list entry cannot delete a newer trip version');
   await db.query('select public.delete_trip($1,$2)', [target.id, target.version]);

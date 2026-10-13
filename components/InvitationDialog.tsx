@@ -5,12 +5,13 @@ import { Check, Copy, Link, LoaderCircle, Share2, ShieldCheck, X } from 'lucide-
 import { createInvitation, listInvitations, revokeInvitation } from '@/lib/access';
 import { invitationUrl, type InvitationScope } from '@/lib/invitationLinks';
 import type { Invitation, InvitationCreated, Trip } from '@/lib/types';
-import { friendlyError } from '@/lib/useTravelData';
+import { friendlyError, TRIP_MEMBER_ACTIONS_MIGRATION } from '@/lib/useTravelData';
 import Modal from './Modal';
 
-function invitationError(error: unknown): string {
+function invitationError(error: unknown, scope: InvitationScope): string {
   if (error && typeof error === 'object' && 'code' in error && error.code === '42501') {
-    return 'Somente a pessoa que criou estas viagens pode gerar ou desativar convites.';
+    if (scope === 'trip') return `Aplique ${TRIP_MEMBER_ACTIONS_MIGRATION} no Supabase para permitir que participantes gerem e gerenciem convites desta viagem.`;
+    return scope === 'collection' ? 'Somente o responsável pela coleção pode compartilhar todas as viagens dela.' : 'Somente o responsável por estas viagens pode compartilhar o conjunto.';
   }
   return friendlyError(error);
 }
@@ -47,7 +48,7 @@ export default function InvitationDialog({ trip, canInviteCollection, online, on
     void listInvitations(scope, targetId).then(items => {
       if (current === request.current) setInvitations(items);
     }).catch(err => {
-      if (current === request.current) setListError(invitationError(err));
+      if (current === request.current) setListError(invitationError(err, scope));
     }).finally(() => {
       if (current === request.current) setLoading(false);
     });
@@ -69,7 +70,7 @@ export default function InvitationDialog({ trip, canInviteCollection, online, on
       setResult({ invitation: created, url });
       setInvitations(items => [{ id: created.invite_id, role: created.role, expires_at: created.expires_at,
         max_uses: created.max_uses, use_count: 0, created_at: new Date().toISOString(), revoked_at: null }, ...items]);
-    } catch (err) { setError(invitationError(err)); }
+    } catch (err) { setError(invitationError(err, scope)); }
     finally { locked.current = false; setBusy(false); onBusyChange(false); }
   }
 
@@ -81,7 +82,7 @@ export default function InvitationDialog({ trip, canInviteCollection, online, on
       setInvitations(items => items.filter(item => item.id !== id));
       if (result?.invitation.invite_id === id) setResult(null);
       setMessage('Convite desativado. Aparelhos já autorizados mantêm o acesso.');
-    } catch (err) { setError(invitationError(err)); }
+    } catch (err) { setError(invitationError(err, scope)); }
     finally { locked.current = false; setBusy(false); onBusyChange(false); }
   }
 

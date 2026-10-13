@@ -14,6 +14,7 @@ export const BUDGET_MIGRATION = '202610080005_orcamento_inicial.sql';
 export const MULTI_TRIP_MIGRATION = '202610080006_multiplas_viagens.sql';
 export const SITE_INVITE_MIGRATION = '202610120003_convite_todas_viagens.sql';
 export const TRIP_DELETE_MIGRATION = '202610120005_excluir_viagem.sql';
+export const TRIP_MEMBER_ACTIONS_MIGRATION = '202610120006_acoes_viagem_participantes.sql';
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''; }
 function messageOf(error: unknown): string { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 function isMissingExpensesSchema(error: unknown): boolean {
@@ -30,6 +31,7 @@ export function friendlyError(error: unknown): string {
   if (message.includes('INVALID_ACTIVITY_TYPE')) return 'Escolha Refeição, Lazer ou Atividade para esta atividade.';
   if (errorCode(error) === '23514' && /activities_type_check/i.test(message)) return `A validação de tipos do banco está desatualizada. Aplique ${ACTIVITY_TYPE_MIGRATION} no Supabase e tente novamente.`;
   if (message.includes('ACCESS_DENIED')) return 'Este aparelho não tem mais acesso a esta viagem. Abra Minhas viagens para ver as viagens autorizadas.';
+  if (message.includes('TRIP_MEMBER_ACTIONS_MIGRATION_PENDING')) return `Falta aplicar a atualização de permissões no Supabase: ${TRIP_MEMBER_ACTIONS_MIGRATION}.`;
   if (message.includes('ACTIVITY_MIGRATION_PENDING') || isMissingActivitySchema(error)) return `Falta aplicar a atualização das atividades no Supabase: ${ACTIVITY_MIGRATION}.`;
   if (/INVALID_INVITE|INVITE_EXPIRED|INVITE_REVOKED|INVITE_EXHAUSTED|INVITE_USED/.test(message)) return 'Este convite não está disponível. Peça um novo convite privado ao aparelho autorizado.';
   if (message.includes('SITE_INVITE_MIGRATION_PENDING') || (['PGRST202', 'PGRST205', '42883'].includes(errorCode(error)) && /site_invite|site_members/.test(message))) return `Falta aplicar a atualização de compartilhamento no Supabase: ${SITE_INVITE_MIGRATION}.`;
@@ -213,13 +215,6 @@ export function useTravelData(tripId: string) {
     const result = await getSupabase().rpc('delete_expense', { p_id: expense.id, p_expected_version: expense.version });
     if (result.error) failWrite(result.error); await afterWrite();
   }
-  async function deleteTrip() {
-    requireWrite();
-    if (role !== 'owner') throw new Error('ACCESS_DENIED');
-    const result = await getSupabase().rpc('delete_trip', { p_id: tripId, p_expected_version: trip.version });
-    if (result.error) failWrite(result.error);
-    if (userRef.current) clearSnapshot(userRef.current, tripId);
-  }
   async function updateTrip(values: Omit<Trip, 'id' | 'version'>, expectedVersion: number, options: { touchBudget: boolean }) {
     requireWrite();
     const base = { p_id: tripId, p_expected_version: expectedVersion, p_name: values.name, p_destination: values.destination, p_start_date: values.start_date, p_end_date: values.end_date, p_timezone: values.timezone, p_person_one: values.person_one, p_person_two: values.person_two };
@@ -243,5 +238,5 @@ export function useTravelData(tripId: string) {
   // Hide the previous route synchronously, before the next effect or request can run.
   const selected = trip.id === tripId;
   return { trip: selected ? trip : emptyTrip, activities: selected ? activities : [], expenses: selected ? expenses : [], expensesReady: selected && expensesReady, role: selected ? role : 'member' as AccessRole, collectionRole: selected ? collectionRole : null,
-    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, deleteTrip, updateTrip, latestActivity, latestExpense, latestTrip };
+    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip };
 }
