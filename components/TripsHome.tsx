@@ -70,7 +70,7 @@ export default function TripsHome({ create = false, onNavigate, onDirtyChange, o
     finally { archiveLocked.current = false; setArchiveBusy(false); onBusyChange(false); }
   }
   async function deleteSelectedTrip() {
-    if (!deleting || deleting.trip_role !== 'owner' || deleteLocked.current) return;
+    if (!deleting || deleteLocked.current) return;
     deleteLocked.current = true; setDeleteBusy(true); onBusyChange(true); setActionError('');
     try {
       await data.deleteTrip(deleting);

@@ -431,7 +431,9 @@ test('authorized members can share and delete a trip, with invite ownership and 
   await assert.rejects(db.query('select public.revoke_trip_invite($1)', [ownerInvite.invite_id]), /ACCESS_DENIED/,
     'members cannot revoke another participant’s invitation');
   await row('select public.revoke_trip_invite($1)', [memberInvite.invite_id]);
-  assert.equal((await rows('select * from public.list_trip_invites($1)', [target.id])).length, 0);
+  const revokedInvites = await rows('select * from public.list_trip_invites($1)', [target.id]);
+  assert.equal(revokedInvites.length, 1, 'revoked invitations remain available as history');
+  assert.ok(revokedInvites[0].revoked_at, 'the participant can revoke their own invitation');
   await assert.rejects(db.query('select public.delete_trip($1,$2)', [target.id, target.version + 1]), /VERSION_CONFLICT/,
     'a stale list entry cannot delete a newer trip version');
   await db.query('select public.delete_trip($1,$2)', [target.id, target.version]);

@@ -222,7 +222,7 @@ const fixture = createServer(async (request, response) => {
     }
     if(rpc==='delete_trip') {
       const target=trips.get(input.p_id);
-      if(!target||tripRole(user.id,target.id)!=='owner') { deny(response); return; }
+      if(!target||!tripRole(user.id,target.id)) { deny(response); return; }
       if(target.version!==input.p_expected_version) { deny(response,'VERSION_CONFLICT','40001',409); return; }
       trips.delete(target.id);
       for(const [id,item] of activities) if(item.trip_id===target.id) activities.delete(id);
@@ -295,12 +295,12 @@ const fixture = createServer(async (request, response) => {
       const existing=invitations.find(item=>item.id===input.p_invite_id&&item.scope===scope);
       const target=existing?.target??(scope==='trip'?input.p_trip_id:input.p_collection_id);
       const role=scope==='trip'?tripRole(user.id,target):collectionRole(user.id,target);
-      if(role!=='owner') { deny(response); return; }
-      if(rpc.startsWith('list_')) { respond(response,invitations.filter(item=>item.scope===scope&&item.target===target).map(safeInvite)); return; }
-      if(rpc.startsWith('revoke_')) { if(!existing) deny(response); else { existing.revoked_at=now(); respond(response,null); } return; }
+      if(scope==='collection' ? role!=='owner' : !role) { deny(response); return; }
+      if(rpc.startsWith('list_')) { respond(response,invitations.filter(item=>item.scope===scope&&item.target===target&&(role==='owner'||item.created_by===user.id)).map(safeInvite)); return; }
+      if(rpc.startsWith('revoke_')) { if(!existing||(role!=='owner'&&existing.created_by!==user.id)) deny(response); else { existing.revoked_at=now(); respond(response,null); } return; }
       const invite = { id: randomUUID(), role: input.p_role ?? 'member', expires_at: new Date(Date.now() + 86400000).toISOString(),
         max_uses: input.p_max_uses ?? 1, use_count: 0, revoked_at: null, created_at: now(), last_used_at: null,
-        scope,target,token:randomUUID().replaceAll('-','')+randomUUID().replaceAll('-',''),users:new Set() };
+        scope,target,created_by:user.id,token:randomUUID().replaceAll('-','')+randomUUID().replaceAll('-',''),users:new Set() };
       invitations.push(invite); respond(response, [{ ...safeInvite(invite), invite_id: invite.id, token: invite.token }]); return;
     }
     deny(response);
@@ -472,7 +472,9 @@ try {
   await visibleText(owner.page, 'Minhas viagens');
   await owner.page.locator('.trip-card').filter({ hasText: 'Nossa Viagem' }).getByRole('button', { name: 'Abrir viagem', exact: true }).click();
   await visibleText(owner.page, 'Nosso cronograma');
-  assert.equal(await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).count(), 0);
+  assert.equal(await owner.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).count(), 1);
+  assert.equal(await owner.page.getByRole('button', { name: 'Excluir viagem', exact: true }).count(), 0,
+    'trip deletion stays in the three-dot menu on the trips list');
   assert.equal(await owner.page.getByText('Viagem privada', { exact: true }).count(), 0);
   assert.equal(new URL(owner.page.url()).hash, '');
   assert.equal(activities.size, 0);
@@ -857,7 +859,7 @@ try {
 
   await member.context.setOffline(false);
   await refresh(member.page);
-  await navigate(owner.page, 'Trocar viagem');
+  await navigate(owner.page, '← Minhas viagens');
   await visibleText(owner.page, 'Minhas viagens');
   const existingCard=owner.page.locator('.trip-card').filter({ hasText:'Viagem de teste' });
   await visibleText(owner.page,'Orçamento inicial');
@@ -900,7 +902,7 @@ try {
   assert.equal(await owner.page.getByText('Teste Airbnb',{exact:true}).count(),0);
   passed('Nova viagem exige orçamento, aceita zero, evita duplo cadastro e começa com cronograma e gastos vazios; cada saldo permanece separado.');
 
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   await owner.page.getByLabel('Pesquisar por nome ou destino',{exact:true}).fill('Destino B');
   await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
   await owner.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
@@ -909,7 +911,7 @@ try {
   await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
   assert.equal(await owner.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).count(),0);
   const bCard=owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'});
-  await bCard.getByLabel('Ações de Segunda aventura').click();
+  await bCard.getByLabel('Mais opções de Segunda aventura').click();
   await bCard.getByRole('button',{name:'Arquivar',exact:true}).click();
   const archive=owner.page.getByRole('dialog',{name:'Guardar esta viagem no arquivo?'});
   assert.equal(tripB.archived_at,null,'archiving waits for a concrete confirmation');
@@ -924,10 +926,10 @@ try {
   await visibleText(owner.page,'Momento só da segunda viagem');
   await navigate(owner.page,'Gastos');
   await expectTotal(owner.page,'expenses-total','5,00');
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   await navigate(owner.page,'Arquivadas');
   const restoreCard=owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'});
-  await restoreCard.getByLabel('Ações de Segunda aventura').click();
+  await restoreCard.getByLabel('Mais opções de Segunda aventura').click();
   await restoreCard.getByRole('button',{name:'Desarquivar',exact:true}).click();
   const restore=owner.page.getByRole('dialog',{name:'Trazer esta viagem de volta?'});
   await restore.getByRole('button',{name:'Desarquivar viagem',exact:true}).click();
@@ -944,7 +946,7 @@ try {
   assert.equal(await owner.page.getByText('Gasto só da segunda viagem',{exact:true}).count(),0);
   passed('Pesquisa e filtro por período funcionam; arquivar/desarquivar preserva atividades, gastos, datas e orçamento sem afetar a viagem anterior.');
 
-  await navigate(owner.page, 'Gerar convite');
+  await navigate(owner.page, 'Compartilhar viagem');
   let inviteDialog = owner.page.getByRole('dialog', { name: 'Convidar outro aparelho' });
   assert.equal(await inviteDialog.getByRole('radio', { name: /^Todas as viagens desta coleção/ }).isChecked(), true);
   await inviteDialog.getByRole('radio', { name: /^Somente esta viagem/ }).check();
@@ -974,17 +976,20 @@ try {
   await tripOnly.page.goto(tripInviteUrl);
   await visibleText(tripOnly.page,'Teste conflito resolvido');
   assert.equal(new URL(tripOnly.page.url()).hash, '');
-  assert.equal(await tripOnly.page.getByRole('button', { name: 'Gerar convite', exact: true }).count(), 0, 'members cannot invite other devices');
-  await navigate(tripOnly.page,'Trocar viagem');
+  assert.equal(await tripOnly.page.getByRole('button', { name: 'Compartilhar viagem', exact: true }).count(), 1,
+    'trip participants can open sharing options');
+  assert.equal(await tripOnly.page.getByRole('button', { name: 'Excluir viagem', exact: true }).count(), 0,
+    'trip deletion stays in the three-dot menu on the trips list');
+  await navigate(tripOnly.page,'← Minhas viagens');
   await tripOnly.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
   assert.equal(await tripOnly.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
   await tripOnly.page.goto(`${appOrigin}/viagens/${tripB.id}/cronograma`);
   await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
   assert.equal(await tripOnly.page.getByText('Momento só da segunda viagem',{exact:true}).count(),0);
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   await owner.page.setViewportSize({ width: 360, height: 780 });
   const sharingCard = owner.page.locator('.trip-card').filter({ hasText: 'Viagem de teste' });
-  await sharingCard.getByLabel('Ações de Viagem de teste').click();
+  await sharingCard.getByLabel('Mais opções de Viagem de teste').click();
   await sharingCard.getByRole('button', { name: 'Gerar convite', exact: true }).click();
   inviteDialog = owner.page.getByRole('dialog', { name: 'Convidar outro aparelho' });
   await inviteDialog.getByRole('button', { name: 'Gerar convite', exact: true }).click();
@@ -1059,11 +1064,17 @@ try {
   await siteDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
   assert.equal(new URL(siteDevice.page.url()).hash,'');
   assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de outra coleção'}).count(),1,'the same invite includes a current trip from another collection');
-  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).getByRole('button',{name:'Gerar convite',exact:true}).count(),0,'site members cannot invite others through an owner-only trip action');
   const sharedTripCard=siteDevice.page.locator('.trip-card').filter({hasText:'Viagem de teste'});
   await sharedTripCard.locator('.trip-card-menu summary').click();
-  assert.equal(await sharedTripCard.getByRole('button',{name:'Excluir viagem',exact:true}).count(),0,'site members cannot delete an owner’s trip');
-  passed('O botão da tela inicial cria um convite para a identidade inteira e inclui viagens existentes em coleções diferentes.');
+  await sharedTripCard.getByRole('button',{name:'Gerar convite',exact:true}).waitFor();
+  await sharedTripCard.getByRole('button',{name:'Excluir viagem',exact:true}).waitFor();
+  await sharedTripCard.getByRole('button',{name:'Gerar convite',exact:true}).click();
+  const memberInviteDialog=siteDevice.page.getByRole('dialog',{name:'Convidar outro aparelho'});
+  await memberInviteDialog.getByRole('button',{name:'Gerar convite',exact:true}).click();
+  const memberTripInviteUrl=await memberInviteDialog.getByLabel('Link do convite',{exact:true}).inputValue();
+  assert.equal(new URLSearchParams(new URL(memberTripInviteUrl).hash.slice(1)).has('convite'),true,'a shared participant can create a trip invitation');
+  await memberInviteDialog.getByRole('button',{name:'Fechar formulário',exact:true}).click();
+  passed('O convite de todas as viagens inclui viagens futuras e qualquer participante pode compartilhar ou excluir pela lista.');
 
   await navigate(owner.page,'Nova viagem');
   await owner.page.getByLabel(/Nome da viagem/).fill('Memória da terceira viagem');
@@ -1085,8 +1096,8 @@ try {
   await navigate(owner.page,'Salvar nossa viagem');
   await visibleText(owner.page,'Sua viagem foi atualizada.');
   assert.equal([...expenses.values()].filter(value=>value.trip_id===tripC.id).length,1);
-  await navigate(owner.page,'Trocar viagem');
-  await navigate(collectionDevice.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
+  await navigate(collectionDevice.page,'← Minhas viagens');
   await collectionDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
   await tripOnly.page.goto(`${appOrigin}/viagens/${tripC.id}/cronograma`);
   await tripOnly.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
@@ -1099,7 +1110,7 @@ try {
   delayedReads.set(tripId,1600);
   await owner.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await owner.page.waitForTimeout(150);
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).getByRole('button',{name:'Abrir viagem',exact:true}).click();
   await visibleText(owner.page,'Momento só da segunda viagem');
   await owner.page.waitForTimeout(1800);
@@ -1110,11 +1121,11 @@ try {
   await owner.page.getByLabel(/Nome da viagem/).fill('Rascunho que fica na segunda viagem');
   owner.page.removeAllListeners('dialog');
   owner.page.once('dialog',dialog=>dialog.dismiss());
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   assert.equal(await owner.page.getByLabel(/Nome da viagem/).inputValue(),'Rascunho que fica na segunda viagem');
   assert.equal(tripB.name,'Segunda aventura');
   owner.page.on('dialog',dialog=>dialog.accept());
-  await navigate(owner.page,'Trocar viagem');
+  await navigate(owner.page,'← Minhas viagens');
   await owner.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
   assert.equal(tripB.name,'Segunda aventura');
   assert.equal(trip.name,'Viagem de teste');
@@ -1167,29 +1178,29 @@ try {
   const stalePrivate=await collectionDevice.page.evaluate(()=>JSON.stringify(localStorage));
   assert.equal(stalePrivate.includes('Momento só da segunda viagem'),false);
   await member.context.setOffline(true);
-  await navigate(member.page,'Trocar viagem');
+  await navigate(member.page,'← Minhas viagens');
   await visibleText(member.page,'Consulta offline neste aparelho');
   await visibleText(member.page,/Somente as viagens sincronizadas neste aparelho estão disponíveis/);
   assert.equal(await member.page.locator('.trip-card').count(),1);
   assert.equal(await member.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).count(),0);
   passed('A revogação interrompe o acesso e limpa a cópia privada; a lista offline indica o histórico parcial disponível neste aparelho.');
 
-  await owner.page.goto(`${appOrigin}/viagens`);
-  await owner.page.getByRole('heading',{name:'Minhas viagens',exact:true}).waitFor();
-  const deletionCard=owner.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'});
+  await siteDevice.page.setViewportSize({width:360,height:800});
+  const deletionCard=siteDevice.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'});
   await deletionCard.locator('.trip-card-menu summary').click();
   await deletionCard.getByRole('button',{name:'Excluir viagem',exact:true}).click();
-  const deleteDialog=owner.page.getByRole('dialog',{name:'Excluir viagem e registros?'});
-  failedRpcs.set('delete_trip',{message:'Could not find the function public.delete_trip in the schema cache',code:'PGRST202',status:404});
+  const deleteDialog=siteDevice.page.getByRole('dialog',{name:'Excluir viagem e registros?'});
+  failedRpcs.set('delete_trip',{message:'ACCESS_DENIED',code:'42501',status:403});
   await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
-  await visibleText(deleteDialog,/202610120005_excluir_viagem.sql/);
+  await visibleText(deleteDialog,/202610120006_acoes_viagem_participantes.sql/);
   await deleteDialog.getByRole('button',{name:'Excluir viagem',exact:true}).click();
   await deleteDialog.waitFor({state:'hidden'});
-  await visibleText(owner.page,'Viagem excluída.');
+  await visibleText(siteDevice.page,'Viagem excluída.');
+  await siteDevice.page.waitForFunction(()=>![...document.querySelectorAll('.trip-card')].some(card=>card.textContent.includes('Memória da terceira viagem')));
+  await owner.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await owner.page.waitForFunction(()=>![...document.querySelectorAll('.trip-card')].some(card=>card.textContent.includes('Memória da terceira viagem')));
   await siteDevice.page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await siteDevice.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===3);
-  assert.equal(await siteDevice.page.locator('.trip-card').filter({hasText:'Memória da terceira viagem'}).count(),0,'deletion removes the trip from every shared device');
   assert.equal(trips.has(tripC.id),false);
   assert.equal([...expenses.values()].some(value=>value.trip_id===tripC.id),false);
   passed('A exclusão exige confirmação, explica a migração pendente e remove a viagem e seus gastos também dos aparelhos compartilhados.');

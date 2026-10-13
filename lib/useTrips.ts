@@ -194,7 +194,16 @@ export function useTrips(options: { search?: string; filter?: TripListFilter } =
   }
   async function deleteTrip(selectedTrip: TripCard): Promise<void> {
     await requireWrite();
-    const result = await getSupabase().rpc('delete_trip', { p_id: selectedTrip.id, p_expected_version: selectedTrip.version });
+    let result = await getSupabase().rpc('delete_trip', { p_id: selectedTrip.id, p_expected_version: selectedTrip.version });
+    if (result.error?.code === '40001') {
+      const latest = await getSupabase().from('trips').select('version').eq('id', selectedTrip.id).single();
+      if (latest.error) failWrite(latest.error, selectedTrip.id);
+      result = await getSupabase().rpc('delete_trip', { p_id: selectedTrip.id, p_expected_version: latest.data.version });
+    }
+    if (result.error?.code === '42501' && selectedTrip.trip_role === 'member') {
+      await refreshAfterWrite();
+      if (rowsRef.current.some(item => item.id === selectedTrip.id)) throw new Error('TRIP_MEMBER_ACTIONS_MIGRATION_PENDING');
+    }
     if (result.error) failWrite(result.error, selectedTrip.id);
     if (userRef.current) clearSnapshot(userRef.current, selectedTrip.id);
     rowsRef.current = rowsRef.current.filter(item => item.id !== selectedTrip.id);
