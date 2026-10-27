@@ -45,7 +45,7 @@ export async function renderScheduleReportPng(report: ScheduleReport, signal: Ab
       ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, REPORT_WIDTH, REPORT_HEIGHT);
       ctx.textBaseline = 'top'; ctx.textAlign = 'left';
       ctx.fillStyle = NAVY; ctx.fillRect(REPORT_MARGIN, REPORT_MARGIN, 8, 52);
-      font(48, 600); ctx.fillText('Cronograma de Viagem', REPORT_MARGIN + 26, REPORT_MARGIN);
+      font(48, 600); ctx.fillText(report.title, REPORT_MARGIN + 26, REPORT_MARGIN);
       font(38, 600); textLines(title, REPORT_MARGIN, 138, 48);
       font(24); ctx.fillStyle = '#536B84';
       textLines(metadata, REPORT_MARGIN, 138 + title.length * 48, 32);

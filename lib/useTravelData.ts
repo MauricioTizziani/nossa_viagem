@@ -65,6 +65,7 @@ export function useTravelData(tripId: string) {
   const [online, setOnline] = useState(true);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [offlinePartial, setOfflinePartial] = useState(false);
+  const [scheduleComplete, setScheduleComplete] = useState(false);
   const userRef = useRef('');
   const reportSourceRef = useRef<ScheduleReportSource | null>(null);
   const scope = useRef({ tripId, generation: 0 });
@@ -123,7 +124,7 @@ export function useTravelData(tripId: string) {
         const timestamp = new Date().toISOString();
         reportSourceRef.current = { trip: currentTrip, activities: records, syncedAt: timestamp, offline: false };
         saveSnapshot({ trip: currentTrip, activities: records, expenses: expenseResult.data, userId, role: currentRole, syncedAt: timestamp, complete: expenseResult.available, scheduleComplete: true, expensesReady: expenseResult.available });
-        setTrip(currentTrip); setActivities(records); setExpenses(expenseResult.data); setExpensesReady(expenseResult.available); setRole(currentRole); setCollectionRole(currentCollectionRole); setSyncedAt(timestamp); setOfflinePartial(!expenseResult.available); setStatus('ready'); setError('');
+        setTrip(currentTrip); setActivities(records); setExpenses(expenseResult.data); setExpensesReady(expenseResult.available); setRole(currentRole); setCollectionRole(currentCollectionRole); setSyncedAt(timestamp); setOfflinePartial(!expenseResult.available); setScheduleComplete(true); setStatus('ready'); setError('');
       } catch (err) {
         if (!current() || abort.signal.aborted) return;
         if (isAccessDenied(err)) {
@@ -142,7 +143,7 @@ export function useTravelData(tripId: string) {
     const request = { ...scope.current };
     consistencyRetries.current = 0;
     reportSourceRef.current = null;
-    setStateTripId(tripId); setTrip(emptyTrip); setActivities([]); setExpenses([]); setSyncedAt(null); setCollectionRole(null); setOfflinePartial(false); setError(''); setStatus(isConfigured ? 'loading' : 'unconfigured');
+    setStateTripId(tripId); setTrip(emptyTrip); setActivities([]); setExpenses([]); setSyncedAt(null); setCollectionRole(null); setOfflinePartial(false); setScheduleComplete(false); setError(''); setStatus(isConfigured ? 'loading' : 'unconfigured');
     setOnline(navigator.onLine);
     const restoreOffline = () => {
       const cached = readOfflineSnapshot(tripId);
@@ -150,6 +151,7 @@ export function useTravelData(tripId: string) {
       userRef.current = cached.userId;
       if (!responseBelongsToRequest(request, scope.current)) return;
       reportSourceRef.current = cached.scheduleComplete ? { trip: normalizeTrip(cached.trip), activities: cached.activities, syncedAt: cached.syncedAt, offline: true } : null;
+      setScheduleComplete(Boolean(cached.scheduleComplete));
       setTrip(normalizeTrip(cached.trip)); setActivities(cached.activities); setExpenses(cached.expenses); setExpensesReady(cached.expensesReady ?? false); setRole(cached.role); setSyncedAt(cached.syncedAt); setOfflinePartial(cached.complete !== true); setStatus('ready');
     };
     if (isConfigured) { if (navigator.onLine) void refresh(); else restoreOffline(); }
@@ -290,5 +292,5 @@ export function useTravelData(tripId: string) {
   // Hide the previous route synchronously, before the next effect or request can run.
   const selected = trip.id === tripId;
   return { trip: selected ? trip : emptyTrip, activities: selected ? activities : [], expenses: selected ? expenses : [], expensesReady: selected && expensesReady, role: selected ? role : 'member' as AccessRole, collectionRole: selected ? collectionRole : null,
-    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip, loadScheduleReport };
+    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, scheduleComplete: selected && scheduleComplete, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip, loadScheduleReport };
 }

@@ -29,6 +29,11 @@ export async function verifyScheduleReport({ page, context, appOrigin, trip, act
     await page.waitForFunction(() => ![...document.querySelectorAll('[role=dialog] button')].some(b => b.textContent.includes('Gerando relatório…')));
   };
   const close = dialog => dialog.getByRole('button', { name: 'Fechar', exact: true }).click();
+  const textDetails = async dialog => {
+    const details = dialog.locator('details').first();
+    if (!await details.evaluate(node => node.open)) await details.locator('summary').click();
+    return details;
+  };
   try {
     for (const a of backup) activities.delete(a.id);
     Object.assign(trip, { name: 'Férias de São João / Relatório', destination: 'São Paulo — Praça da Sé', start_date: '2026-11-08', end_date: '2026-11-10', timezone: 'America/Manaus', updated_at: new Date().toISOString() });
@@ -60,7 +65,7 @@ export async function verifyScheduleReport({ page, context, appOrigin, trip, act
     const downloading = page.waitForEvent('download');
     await dialog.getByRole('link', { name: 'Baixar PNG', exact: true }).first().click();
     const download = await downloading;
-    assert.match(download.suggestedFilename(), /^cronograma-ferias-de-sao-joao-relatorio-\d{4}-\d{2}-\d{2}\.png$/);
+    assert.equal(download.suggestedFilename(), 'cronograma-ferias-de-sao-joao-relatorio-completo.png');
     const output = resolve(root, 'artifacts/relatorio-desktop.png');
     await download.saveAs(output);
     const bytes = await readFile(output);
@@ -120,7 +125,8 @@ export async function verifyScheduleReport({ page, context, appOrigin, trip, act
     one.name = 'Visita com nome completo '.repeat(6);
     one.manual_place_address = 'Endereço completo, São João, com instruções para chegar. '.repeat(8);
     for (let i = 0; i < 34; i++) {
-      const row = { ...one, id: randomUUID(), name: `Passeio ${String(i).padStart(2, '0')}`, manual_place_address: 'Praça da Sé, 1 — São Paulo', starts_at: new Date(Date.parse('2026-11-09T03:00:00Z') + i * 60000).toISOString(), observation: i === 33 ? 'Última observação preservada' : null, type: 'Lazer', budget_cents: i % 2 ? null : 0 };
+      const startsAt = i === 32 ? '2026-11-16T02:00:00Z' : i === 33 ? '2026-11-10T02:45:00Z' : new Date(Date.parse('2026-11-09T03:00:00Z') + i * 60000).toISOString();
+      const row = { ...one, id: randomUUID(), name: `Passeio ${String(i).padStart(2, '0')}`, manual_place_address: 'Praça da Sé, 1 — São Paulo', starts_at: startsAt, observation: i === 33 ? longObservation : null, type: 'Lazer', budget_cents: i % 2 ? null : 0 };
       activities.set(row.id, row);
     }
     trip.updated_at = new Date().toISOString();
@@ -136,15 +142,16 @@ export async function verifyScheduleReport({ page, context, appOrigin, trip, act
     assert.ok(pageCount > 2);
     assert.ok(filterReads.some(read => read.offset > 3));
     assert.ok(filterReads.every(read => read.trip === `eq.${trip.id}`));
-    await dialog.locator('details summary').click();
+    let details = await textDetails(dialog);
     assert.equal(await dialog.locator('tbody tr').count(), 35);
-    const reportText = await dialog.locator('table').innerText();
+    const reportText = await details.locator('table').innerText();
     assert.ok(reportText.includes(longObservation));
-    assert.ok(reportText.includes('Última observação preservada'));
+    assert.ok(reportText.includes('Linha 140: refeição, ação e atenção; preservar todo este conteúdo.'));
     assert.ok(!reportText.includes('Teste conflito resolvido'));
     assert.match(await dialog.innerText(), /35 atividades exportadas/);
     assert.match(await dialog.innerText(), /Total previsto das atividades exportadas: R\$\s150,00/);
     assert.match(await dialog.innerText(), /17 atividades com orçamento “A definir”/);
+    assert.match(await dialog.innerText(), /cronograma-ferias-de-sao-joao-relatorio-completo-pagina-01\.png/);
     const images = await dialog.locator('img').evaluateAll(async images => Promise.all(images.map(async img => {
       const image = new Image(); image.src = img.src; await image.decode(); return [image.naturalWidth, image.naturalHeight];
     })));
@@ -175,10 +182,54 @@ export async function verifyScheduleReport({ page, context, appOrigin, trip, act
     await page.screenshot({ path: resolve(root, 'artifacts/relatorio-previa-desktop.png') });
     assert.equal(JSON.stringify({ trip, activities: [...activities.values()], expenses: [...expenses.values()], trips: [...trips.values()] }), untouched);
 
+    await dialog.getByRole('radio', { name: /Cronograma de um dia/ }).check();
+    assert.equal(await dialog.getByRole('combobox', { name: 'Dia do cronograma' }).inputValue(), '2026-11-08', 'first day with activities is selected automatically');
+    assert.match(await dialog.getByRole('combobox', { name: 'Dia do cronograma' }).innerText(), /Domingo, 08\/11\/2026 — 33 atividades/);
+    assert.match(await dialog.getByRole('combobox', { name: 'Dia do cronograma' }).innerText(), /Domingo, 15\/11\/2026 — 1 atividade/, 'dates outside the trip period are included');
+    assert.equal(await dialog.getByRole('button', { name: 'Enviar pelo WhatsApp', exact: true }).isDisabled(), true, 'old image cannot be shared after selecting a different scope');
+    const daySelector = dialog.getByLabel('Dia do cronograma');
+    await daySelector.selectOption('2026-11-09');
+    assert.equal(await dialog.getByRole('button', { name: 'Enviar pelo WhatsApp', exact: true }).isDisabled(), true, 'old image cannot be shared after changing the day');
+    await generate(dialog);
+    details = await textDetails(dialog);
+    assert.equal(await dialog.locator('tbody tr').count(), 1);
+    const dailyText = await details.innerText();
+    assert.match(dailyText, /Cronograma do dia/);
+    assert.match(dailyText, /Segunda-feira, 09\/11\/2026/);
+    assert.ok(dailyText.includes(longObservation));
+    assert.ok(!dailyText.includes('Passeio 32'));
+    assert.ok(!dailyText.includes('Passeio 31'));
+    assert.match(await page.locator('[role=dialog]').innerText(), /Resumo do dia · 1 atividade exportada/);
+    assert.match(await dialog.locator('img').first().getAttribute('alt'), /página 1 de \d+/);
+    const dailyDownload = page.waitForEvent('download');
+    await dialog.getByRole('link', { name: 'Baixar PNG · 1', exact: true }).click();
+    assert.match((await dailyDownload).suggestedFilename(), /-2026-11-09-pagina-01\.png$/);
+    await page.evaluate(() => { window.reportShareMode = 'success'; });
+    await dialog.getByRole('button', { name: 'Enviar pelo WhatsApp', exact: true }).click();
+    await dialog.getByRole('status').filter({ hasText: 'Compartilhamento encerrado' }).waitFor();
+    assert.match(await page.evaluate(() => window.reportShares.at(-1)[0].name), /-2026-11-09-pagina-01\.png$/);
+    const dailyPages = await dialog.locator('img').count();
+    assert.ok(dailyPages > 1, 'a long one-day schedule is paginated');
+    assert.equal(await page.evaluate(() => window.reportShares.at(-1).length), dailyPages, 'daily sharing includes every page');
+    assert.ok((await page.evaluate(() => window.reportShares.at(-1).map(file => file.name))).every(name => /-2026-11-09-pagina-\d{2}\.png$/.test(name)));
+
+    await daySelector.selectOption('2026-11-15');
+    await generate(dialog);
+    details = await textDetails(dialog);
+    assert.equal(await dialog.locator('tbody tr').count(), 1);
+    assert.ok((await details.innerText()).includes('Passeio 32'));
+    assert.ok(!(await details.innerText()).includes('Passeio 33'));
+
+    await dialog.getByRole('radio', { name: 'Cronograma completo', exact: true }).check();
+    await generate(dialog);
+    details = await textDetails(dialog);
+    assert.equal(await dialog.locator('tbody tr').count(), 35);
+    assert.match(await dialog.locator('details').innerText(), /Passeio 33/);
+    assert.match(await dialog.locator('details').innerText(), /Passeio 32/);
     await dialog.getByLabel(/Somente atividades dos filtros atuais/).check();
     await generate(dialog);
     assert.equal(await dialog.locator('tbody tr').count(), 1);
-    assert.match(await dialog.locator('details').innerText(), /Relatório parcial.*Tipo: Refeição/);
+    assert.match(await details.innerText(), /Relatório parcial.*Tipo: Refeição/);
     assert.ok(!(await dialog.locator('table').innerText()).includes('Passeio 33'));
     await close(dialog);
     await page.getByLabel('Filtrar por tipo').selectOption('');

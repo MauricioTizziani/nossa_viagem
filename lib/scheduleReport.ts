@@ -1,4 +1,4 @@
-import { dateKey, filterActivities, formatCurrency, formatDateTime, sortActivities } from './domain';
+import { dateKey, filterActivities, formatCurrency, formatDateTime, formatDay, sortActivities } from './domain';
 import type { Activity, ActivityFilters, Trip } from './types';
 
 export interface ScheduleReportSource {
@@ -8,6 +8,7 @@ export interface ScheduleReportSource {
   offline: boolean;
 }
 export interface ScheduleReport {
+  title: string;
   tripName: string;
   timezone: string;
   header: string[];
@@ -35,25 +36,36 @@ export function scheduleReportFingerprint(trip: Trip, activities: Activity[]): s
     sortActivities(activities).map(a => [a.id, a.starts_at, a.budget_cents, a.name, a.type, a.observation, a.osm_place_name, a.osm_place_address, a.manual_place_name, a.manual_place_address])]);
 }
 
-export function reportFilename(tripName: string, generatedAt: string, timezone: string): string {
+export function reportFilename(tripName: string, generatedAt: string, timezone: string, scope: ScheduleReportSelection = 'complete'): string {
   const slug = tripName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80).replace(/-$/g, '') || 'viagem';
-  return `cronograma-${slug}-${dateKey(generatedAt, timezone)}`;
+  const suffix = scope !== 'complete' && typeof scope === 'object' && scope.kind === 'day' ? scope.day : scope === 'complete' ? 'completo' : `filtrado-${dateKey(generatedAt, timezone)}`;
+  return `cronograma-${slug}-${suffix}`;
 }
 
-export function createScheduleReport(source: ScheduleReportSource, filters: ActivityFilters | null, generatedAt = new Date().toISOString()): ScheduleReport {
+export type ScheduleReportSelection = 'complete' | { kind: 'day'; day: string } | { kind: 'filters'; filters: ActivityFilters };
+
+export function createScheduleReport(source: ScheduleReportSource, selection: ScheduleReportSelection | ActivityFilters | null, generatedAt = new Date().toISOString()): ScheduleReport {
   const { trip } = source;
   if (!trip.id || source.activities.some(a => a.trip_id !== trip.id)) throw new Error('Não foi possível confirmar os dados desta viagem. Reabra a viagem e tente novamente.');
-  const activities = filters ? filterActivities(source.activities, filters, trip.timezone) : sortActivities(source.activities);
-  if (!activities.length) throw new Error('Não existem atividades para exportar no escopo escolhido.');
+  const filters = selection && typeof selection === 'object' && 'kind' in selection && selection.kind === 'filters' ? selection.filters
+    : selection && typeof selection === 'object' && !('kind' in selection) ? selection : null;
+  const day = selection && typeof selection === 'object' && 'kind' in selection && selection.kind === 'day' ? selection.day : null;
+  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Escolha um dia válido para o cronograma.');
+  // Date grouping uses the same trip-timezone helper as the visible schedule.
+  const activities = day ? sortActivities(source.activities.filter(activity => dateKey(activity.starts_at, trip.timezone) === day))
+    : filters ? filterActivities(source.activities, filters, trip.timezone) : sortActivities(source.activities);
+  if (!activities.length) throw new Error(day ? `Não existem atividades em ${displayReportDay(day)}. Selecione outro dia.` : 'Não existem atividades para exportar no escopo escolhido.');
   const period = [trip.start_date ? `Início: ${civilDate(trip.start_date)}` : '', trip.end_date ? `Término: ${civilDate(trip.end_date)}` : ''].filter(Boolean).join(' · ');
   const undefinedCount = activities.filter(a => a.budget_cents === null).length;
   const total = activities.reduce((sum, a) => sum + (a.budget_cents ?? 0), 0);
+  const title = day ? 'Cronograma do dia' : 'Cronograma de Viagem';
+  const label = day ? displayReportDay(day) : '';
   return {
-    tripName: trip.name, timezone: trip.timezone, generatedAt,
-    filename: reportFilename(trip.name, generatedAt, trip.timezone),
-    header: [trip.destination ? `Destino: ${trip.destination}` : '', period,
+    title, tripName: trip.name, timezone: trip.timezone, generatedAt,
+    filename: reportFilename(trip.name, generatedAt, trip.timezone, day ? { kind: 'day', day } : filters ? { kind: 'filters', filters } : 'complete'),
+    header: [trip.destination ? `Destino: ${trip.destination}` : '', day ? label : period,
       `Gerado em ${formatDateTime(generatedAt, trip.timezone)} · Fuso: ${trip.timezone}`,
-      filters ? `Relatório parcial · ${describeReportFilters(filters) || 'Filtros atuais'}` : 'Cronograma completo',
+      day ? 'Relatório de um dia' : filters ? `Relatório parcial · ${describeReportFilters(filters) || 'Filtros atuais'}` : 'Cronograma completo',
       source.offline ? `Cópia offline · Última sincronização: ${formatDateTime(source.syncedAt, trip.timezone)}` : '',
     ].filter(Boolean),
     rows: activities.map(a => {
@@ -62,10 +74,16 @@ export function createScheduleReport(source: ScheduleReportSource, filters: Acti
       return { cells: [formatDateTime(a.starts_at, trip.timezone).replace(' ', '\n'), formatCurrency(a.budget_cents), a.name,
         [name, address && address !== name ? address : ''].filter(Boolean).join('\n') || 'A definir', a.type, a.observation?.trim() ? a.observation : '—'] };
     }),
-    summary: [`Resumo geral · ${activities.length} ${activities.length === 1 ? 'atividade exportada' : 'atividades exportadas'}`,
+    summary: [`${day ? 'Resumo do dia' : 'Resumo geral'} · ${activities.length} ${activities.length === 1 ? 'atividade exportada' : 'atividades exportadas'}`,
       `Total previsto das atividades exportadas: ${formatCurrency(total)}`,
       ...(undefinedCount ? [`${undefinedCount} ${undefinedCount === 1 ? 'atividade com orçamento' : 'atividades com orçamento'} “A definir”`] : [])],
   };
+}
+
+export function displayReportDay(day: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  const name = formatDay(day);
+  return name.replace(/^\p{L}/u, letter => letter.toLocaleUpperCase('pt-BR'));
 }
 
 export type MeasureText = (text: string) => number;

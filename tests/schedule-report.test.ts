@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createScheduleReport, describeReportFilters, paginateReport, REPORT_COLUMNS, REPORT_HEIGHT, REPORT_LINE_HEIGHT, REPORT_CELL_PADDING, REPORT_WIDTH, scheduleReportFingerprint, wrapReportText } from '../lib/scheduleReport';
+import { createScheduleReport, describeReportFilters, displayReportDay, paginateReport, REPORT_COLUMNS, REPORT_HEIGHT, REPORT_LINE_HEIGHT, REPORT_CELL_PADDING, REPORT_WIDTH, scheduleReportFingerprint, wrapReportText } from '../lib/scheduleReport';
 import { createReportZip } from '../lib/reportZip';
 import { EMPTY_PLACE, type Activity, type Trip } from '../lib/types';
 
@@ -21,9 +21,37 @@ test('report uses the selected trip zone, saved places and planned integer cents
   assert.equal(report.rows[2].cells[5], '—');
   assert.match(report.summary.join('\n'), /Total previsto das atividades exportadas: R\$\s150,00/);
   assert.match(report.summary[2], /1 atividade com orçamento/);
-  assert.equal(report.filename, 'cronograma-ferias-sao-joao-2026-11-08');
+  assert.equal(report.filename, 'cronograma-ferias-sao-joao-completo');
   assert.match(report.header.join('\n'), /08\/11\/2026 22:00/);
   assert.ok(!JSON.stringify(report).includes(trip.id));
+});
+
+test('a selected day includes exactly its trip-timezone date, preserves midnight boundaries and ignores filters', () => {
+  const activities = [
+    activity('boundary-before', { starts_at: '2026-11-09T03:59:00Z', budget_cents: 0 }),
+    activity('boundary-after', { starts_at: '2026-11-10T03:59:00Z', budget_cents: 15000, type: 'Refeição', observation: 'Mesa reservada' }),
+    activity('other-day', { starts_at: '2026-11-10T04:00:00Z', budget_cents: 400 }),
+    activity('outside-trip-period', { starts_at: '2026-11-16T03:59:00Z', budget_cents: null }),
+  ];
+  const daily = createScheduleReport(source(activities), { kind: 'day', day: '2026-11-08' }, '2026-11-20T13:00:00Z');
+  assert.equal(daily.title, 'Cronograma do dia');
+  assert.deepEqual(daily.rows.map(row => row.cells[2]), ['Atividade boundary-before']);
+  assert.equal(daily.rows[0].cells[0], '08/11/2026\n23:59');
+  assert.deepEqual(daily.summary, ['Resumo do dia · 1 atividade exportada', 'Total previsto das atividades exportadas: R$ 0,00']);
+  assert.match(daily.header.join('\n'), /Domingo, 08\/11\/2026/);
+  assert.equal(daily.filename, 'cronograma-ferias-sao-joao-2026-11-08', 'uses the selected day, not generation date');
+  const next = createScheduleReport(source(activities), { kind: 'day', day: '2026-11-09' });
+  assert.deepEqual(next.rows.map(row => row.cells[2]), ['Atividade boundary-after']);
+  assert.equal(next.rows[0].cells[0], '09/11/2026\n23:59');
+  const following = createScheduleReport(source(activities), { kind: 'day', day: '2026-11-10' });
+  assert.deepEqual(following.rows.map(row => row.cells[2]), ['Atividade other-day']);
+  assert.equal(following.rows[0].cells[0], '10/11/2026\n00:00');
+  const outside = createScheduleReport(source(activities), { kind: 'day', day: '2026-11-15' });
+  assert.equal(outside.rows.length, 1, 'days outside the trip period remain available');
+  assert.equal(outside.rows[0].cells[1], 'A definir');
+  assert.equal(displayReportDay('2026-11-08'), 'Domingo, 08/11/2026');
+  assert.throws(() => createScheduleReport(source(activities), { kind: 'day', day: '2026-11-12' }), /Não existem atividades/);
+  assert.throws(() => createScheduleReport(source(activities), { kind: 'day', day: 'inválida' }), /Escolha um dia válido/);
 });
 
 test('filters use the same semantics as the schedule and identify a partial/offline report', () => {

@@ -6,6 +6,9 @@
 .scope label { display:flex; align-items:flex-start; gap:10px; padding:7px 0; font-size:14px; cursor:pointer; }
 .scope input { flex:none; width:18px; height:18px; margin-top:2px; accent-color:#3B5F86; }
 .scope small { display:block; margin-top:5px; line-height:1.6; overflow-wrap:anywhere; color:#536B84; }
+.dayChoice { display:block !important; margin:6px 0 12px 28px; padding:0 !important; cursor:default !important; }
+.dayChoice>span { display:block; max-width:420px; font-weight:600; color:#3B5F86; }
+.dayChoice select { display:block; width:100%; min-height:46px; margin-top:8px; padding:8px 12px; border:1px solid #CBD9E8; border-radius:8px; background:white; color:#233E5A; font:inherit; }
 .actions { display:flex; flex-wrap:wrap; gap:10px; }
 .primary,.secondary { display:inline-flex; min-height:44px; align-items:center; justify-content:center; gap:8px; padding:11px 16px; border:1px solid #CBD9E8; border-radius:9px; text-decoration:none; font-size:14px; font-weight:600; line-height:1.4; }
 .primary { background:#3B5F86; color:#FFF; border-color:#3B5F86; }

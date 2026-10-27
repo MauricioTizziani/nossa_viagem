@@ -20,6 +20,7 @@ interface ScheduleProps {
   expensesReady?: boolean;
   trip: Trip;
   online: boolean;
+  scheduleComplete: boolean;
   loadReportSource: (signal: AbortSignal) => Promise<ScheduleReportSource>;
   onAdd: () => void;
   onEdit: (activity: Activity) => void;
@@ -102,7 +103,7 @@ function EmptySchedule({ filtered, onAdd, onClear }: { filtered: boolean; onAdd:
   );
 }
 
-export function Schedule({ activities, expenses = [], expensesReady = true, trip, online, loadReportSource, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
+export function Schedule({ activities, expenses = [], expensesReady = true, trip, online, scheduleComplete, loadReportSource, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
   const [view, setView] = useState<"table" | "timeline">("table");
   const [day, setDay] = useState("");
   const [type, setType] = useState("");
@@ -141,7 +142,7 @@ export function Schedule({ activities, expenses = [], expensesReady = true, trip
       </div>
 
       <ScheduleBudget view={budget} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
-      {reportOpen && <ScheduleReportDialog trip={trip} activities={activities} filters={{ day, type: type as Activity['type'] | '', search }} online={online} loadSource={loadReportSource} onClose={() => setReportOpen(false)}/>}
+      {reportOpen && <ScheduleReportDialog trip={trip} activities={activities} filters={{ day, type: type as Activity['type'] | '', search }} online={online} scheduleComplete={scheduleComplete} loadSource={loadReportSource} onClose={() => setReportOpen(false)}/>}
 
       <div className="rounded-[18px] border border-[#DCEAEC] bg-white p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
