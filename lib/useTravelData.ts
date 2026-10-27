@@ -5,6 +5,7 @@ import { coerceInitialBudgetCents } from './budget';
 import { getSupabase, initializeSession, isConfigured, resetSessionInitialization } from './supabase';
 import { clearSnapshot, readOfflineSnapshot, readOfflineUserId, saveSnapshot } from './storage';
 import { readAllPages, responseBelongsToRequest } from './dataQueries';
+import type { ScheduleReportSource } from './scheduleReport';
 
 export const emptyTrip: Trip = { id: '', name: '', destination: '', start_date: null, end_date: null, timezone: 'America/Sao_Paulo', person_one: null, person_two: null, initial_budget_cents: null, collection_id: null, archived_at: null, version: 1 };
 export const ACTIVITY_MIGRATION = '202610120001_observacao_atividade.sql';
@@ -65,6 +66,7 @@ export function useTravelData(tripId: string) {
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [offlinePartial, setOfflinePartial] = useState(false);
   const userRef = useRef('');
+  const reportSourceRef = useRef<ScheduleReportSource | null>(null);
   const scope = useRef({ tripId, generation: 0 });
   if (scope.current.tripId !== tripId) scope.current = { tripId, generation: scope.current.generation + 1 };
   const refreshRef = useRef<{ tripId: string; generation: number; promise: Promise<void> } | null>(null);
@@ -119,7 +121,8 @@ export function useTravelData(tripId: string) {
         const currentCollectionRole = (collections.data as AuthorizedCollection[]).find(item => item.id === currentTrip.collection_id)?.role ?? null;
         const currentRole: AccessRole = membership.data?.role === 'owner' || currentCollectionRole === 'owner' ? 'owner' : 'member';
         const timestamp = new Date().toISOString();
-        saveSnapshot({ trip: currentTrip, activities: records, expenses: expenseResult.data, userId, role: currentRole, syncedAt: timestamp, complete: expenseResult.available, expensesReady: expenseResult.available });
+        reportSourceRef.current = { trip: currentTrip, activities: records, syncedAt: timestamp, offline: false };
+        saveSnapshot({ trip: currentTrip, activities: records, expenses: expenseResult.data, userId, role: currentRole, syncedAt: timestamp, complete: expenseResult.available, scheduleComplete: true, expensesReady: expenseResult.available });
         setTrip(currentTrip); setActivities(records); setExpenses(expenseResult.data); setExpensesReady(expenseResult.available); setRole(currentRole); setCollectionRole(currentCollectionRole); setSyncedAt(timestamp); setOfflinePartial(!expenseResult.available); setStatus('ready'); setError('');
       } catch (err) {
         if (!current() || abort.signal.aborted) return;
@@ -138,6 +141,7 @@ export function useTravelData(tripId: string) {
     alive.current = true;
     const request = { ...scope.current };
     consistencyRetries.current = 0;
+    reportSourceRef.current = null;
     setStateTripId(tripId); setTrip(emptyTrip); setActivities([]); setExpenses([]); setSyncedAt(null); setCollectionRole(null); setOfflinePartial(false); setError(''); setStatus(isConfigured ? 'loading' : 'unconfigured');
     setOnline(navigator.onLine);
     const restoreOffline = () => {
@@ -145,6 +149,7 @@ export function useTravelData(tripId: string) {
       if (!cached) { setError('Esta viagem ainda não foi sincronizada neste aparelho. Abra-a com conexão para consultar offline.'); setStatus('error'); return; }
       userRef.current = cached.userId;
       if (!responseBelongsToRequest(request, scope.current)) return;
+      reportSourceRef.current = cached.scheduleComplete ? { trip: normalizeTrip(cached.trip), activities: cached.activities, syncedAt: cached.syncedAt, offline: true } : null;
       setTrip(normalizeTrip(cached.trip)); setActivities(cached.activities); setExpenses(cached.expenses); setExpensesReady(cached.expensesReady ?? false); setRole(cached.role); setSyncedAt(cached.syncedAt); setOfflinePartial(cached.complete !== true); setStatus('ready');
     };
     if (isConfigured) { if (navigator.onLine) void refresh(); else restoreOffline(); }
@@ -237,8 +242,53 @@ export function useTravelData(tripId: string) {
     requireWrite(); const result = await getSupabase().from('trips').select('*').eq('id', tripId).single();
     if (result.error) failWrite(errorCode(result.error) === 'PGRST116' ? new Error('ACCESS_DENIED') : result.error); return normalizeTrip(result.data as Trip);
   }
+  async function loadScheduleReport(signal: AbortSignal): Promise<ScheduleReportSource> {
+    const request = { ...scope.current };
+    const ensureCurrent = () => {
+      signal.throwIfAborted();
+      if (!alive.current || !responseBelongsToRequest(request, scope.current) || trip.id !== tripId || status !== 'ready') throw new DOMException('Consulta cancelada', 'AbortError');
+    };
+    ensureCurrent();
+    if (!navigator.onLine) {
+      const cached = readOfflineSnapshot(tripId);
+      const inMemory = reportSourceRef.current;
+      if (inMemory?.trip.id === tripId && readOfflineUserId() === userRef.current) return { ...inMemory, offline: true };
+      if (!cached || cached.userId !== userRef.current || !cached.scheduleComplete) throw new Error('O cronograma disponível neste aparelho pode estar incompleto. Conecte-se e sincronize a viagem antes de gerar o relatório.');
+      return { trip: normalizeTrip(cached.trip), activities: cached.activities, syncedAt: cached.syncedAt, offline: true };
+    }
+    try {
+      const userId = await initializeSession();
+      ensureCurrent();
+      if (userId !== userRef.current) throw new Error('ACCESS_DENIED');
+      const client = getSupabase();
+      const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(60000)]);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const before = await client.from('trips').select('*').eq('id', tripId).abortSignal(boundedSignal).maybeSingle();
+        if (before.error) throw before.error;
+        if (!before.data) throw new Error('ACCESS_DENIED');
+        const records = await readAllPages<Activity>(async (offset, size) => await client.from('activities').select('*').eq('trip_id', tripId).order('id').range(offset, offset + size - 1).abortSignal(boundedSignal));
+        const after = await client.from('trips').select('id,version,updated_at').eq('id', tripId).abortSignal(boundedSignal).maybeSingle();
+        if (after.error) throw after.error;
+        if (!after.data || records.some(a => a.trip_id !== tripId)) throw new Error('ACCESS_DENIED');
+        ensureCurrent();
+        if (before.data.version !== after.data.version || before.data.updated_at !== after.data.updated_at) continue;
+        const loadedTrip = normalizeTrip(before.data as Trip);
+        const loadedActivities = records.map(a => ({ ...a, observation: a.observation ?? null }));
+        const source: ScheduleReportSource = { trip: loadedTrip, activities: loadedActivities, syncedAt: new Date().toISOString(), offline: false };
+        reportSourceRef.current = source;
+        // Keep the visible schedule aligned with the confirmed report source. No writes.
+        setTrip(loadedTrip); setActivities(loadedActivities);
+        return source;
+      }
+      throw new Error('O cronograma está recebendo alterações. Aguarde um momento e gere novamente.');
+    } catch (err) {
+      ensureCurrent();
+      if (isAccessDenied(err)) failWrite(err);
+      throw err;
+    }
+  }
   // Hide the previous route synchronously, before the next effect or request can run.
   const selected = trip.id === tripId;
   return { trip: selected ? trip : emptyTrip, activities: selected ? activities : [], expenses: selected ? expenses : [], expensesReady: selected && expensesReady, role: selected ? role : 'member' as AccessRole, collectionRole: selected ? collectionRole : null,
-    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip };
+    status: stateTripId !== tripId || (!selected && status === 'ready') ? (isConfigured ? 'loading' : 'unconfigured') as DataStatus : status, error: selected || status !== 'ready' ? error : '', online, syncedAt: selected ? syncedAt : null, offlinePartial: selected && offlinePartial, refresh, saveActivity, deleteActivity, saveExpense, deleteExpense, updateTrip, latestActivity, latestExpense, latestTrip, loadScheduleReport };
 }

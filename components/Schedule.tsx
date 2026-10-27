@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, CalendarDays, Check, ChevronDown, ChevronUp, Clock3, Copy, Heart, List, MapPin, MessageSquareText, Pencil, Plus, Receipt, Route, Search, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
+import { ArrowUpRight, CalendarDays, Check, ChevronDown, ChevronUp, Clock3, Copy, FileImage, Heart, List, MapPin, MessageSquareText, Pencil, Plus, Receipt, Route, Search, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
 import { ACTIVITY_TYPES, type Activity, type Expense, type Trip } from "../lib/types";
 import { dateKey, directionsUrl, filterActivities, formatCurrency, formatDateTime, formatDay, groupActivities, mapsUrl, nextActivity, sortActivities, summarizeActivities } from "../lib/domain";
 import { tripBudgetView } from "../lib/budget";
@@ -9,6 +9,8 @@ import { ScheduleBudget } from "./BudgetFollowUp";
 import { compareActivityExpenses, describeActivitySpending } from "../lib/expenses";
 import { OsmAttribution } from "./OsmPlacePicker";
 import { CategoryBadge } from "./Icons";
+import ScheduleReportDialog from './ScheduleReportDialog';
+import type { ScheduleReportSource } from '../lib/scheduleReport';
 
 interface ScheduleProps {
   activities: Activity[];
@@ -18,6 +20,7 @@ interface ScheduleProps {
   expensesReady?: boolean;
   trip: Trip;
   online: boolean;
+  loadReportSource: (signal: AbortSignal) => Promise<ScheduleReportSource>;
   onAdd: () => void;
   onEdit: (activity: Activity) => void;
   onDuplicate: (activity: Activity) => void;
@@ -99,12 +102,13 @@ function EmptySchedule({ filtered, onAdd, onClear }: { filtered: boolean; onAdd:
   );
 }
 
-export function Schedule({ activities, expenses = [], expensesReady = true, trip, online, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
+export function Schedule({ activities, expenses = [], expensesReady = true, trip, online, loadReportSource, onAdd, onEdit, onDuplicate, onDelete, onDefineBudget }: ScheduleProps) {
   const [view, setView] = useState<"table" | "timeline">("table");
   const [day, setDay] = useState("");
   const [type, setType] = useState("");
   const [search, setSearch] = useState("");
   const [now, setNow] = useState(() => new Date());
+  const [reportOpen, setReportOpen] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60000);
@@ -130,10 +134,14 @@ export function Schedule({ activities, expenses = [], expensesReady = true, trip
           <h1 id="schedule-heading" className="text-[30px] font-semibold leading-tight tracking-[-0.035em] text-[#125E67] sm:text-[38px]">Nosso cronograma</h1>
           <p className="mt-2 text-sm leading-6 text-[#4F7276]">Cada momento tem um lugar na nossa viagem.</p>
         </div>
-        <button type="button" onClick={onAdd} className="inline-flex min-h-12 w-full items-center sm:w-auto justify-center gap-2 rounded-[10px] bg-[#28AEB9] px-5 text-sm font-semibold text-[#062E32] transition hover:bg-[#1F9EAA] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#125E67]"><Plus className="h-4 w-4" aria-hidden="true" />Adicionar atividade</button>
+        <div className="flex w-full flex-wrap gap-3 sm:w-auto">
+          <button type="button" onClick={() => setReportOpen(true)} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-[10px] border border-[#CBD9E8] bg-white px-5 text-sm font-semibold text-[#3B5F86] hover:bg-[#F0F6FD] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#3B5F86]"><FileImage className="h-4 w-4" aria-hidden="true"/>Gerar relatório</button>
+          <button type="button" onClick={onAdd} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-[10px] bg-[#28AEB9] px-5 text-sm font-semibold text-[#062E32] transition hover:bg-[#1F9EAA] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#125E67]"><Plus className="h-4 w-4" aria-hidden="true" />Adicionar atividade</button>
+        </div>
       </div>
 
       <ScheduleBudget view={budget} offline={!online} filtered={hasFilters} onDefineBudget={onDefineBudget} />
+      {reportOpen && <ScheduleReportDialog trip={trip} activities={activities} filters={{ day, type: type as Activity['type'] | '', search }} online={online} loadSource={loadReportSource} onClose={() => setReportOpen(false)}/>}
 
       <div className="rounded-[18px] border border-[#DCEAEC] bg-white p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">

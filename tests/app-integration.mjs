@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
+import { verifyScheduleReport } from './report-browser.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const nextBin = resolve(root, 'node_modules/next/dist/bin/next');
@@ -484,6 +485,11 @@ try {
   assert.equal(rpcCalls.includes('open_shared_trip'), false);
   passed('O convite explícito da coleção abre Minhas viagens e preserva a viagem existente sem conceder acesso público.');
 
+  if (process.argv.includes('--report-only')) {
+    await newActivity(owner.page, { name: 'Base do relatório', budget: '0', manual: true });
+    await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip, activities, trips, expenses, root });
+    passed('Relatório PNG: conteúdo e paginação, downloads e bytes iguais à prévia, filtros, viagem isolada, compartilhamento simulado, celular em pé e PWA offline.');
+  } else {
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
   const observation = 'Reservar uma mesa perto da janela.\n\nChegar 15 minutos antes.';
   await newActivity(owner.page, { name: 'Teste almoço', date: '2030-04-10T12:30', type: 'Refeição', observation, osm: true });
@@ -906,7 +912,9 @@ try {
   await owner.page.getByLabel('Pesquisar por nome ou destino',{exact:true}).fill('Destino B');
   await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
   await owner.page.waitForFunction(()=>document.querySelectorAll('.trip-card').length===1);
+  const clearedSearch = owner.page.waitForResponse(response => response.url().includes('/rpc/list_authorized_trips') && response.request().postDataJSON()?.p_search === null);
   await owner.page.getByLabel('Pesquisar por nome ou destino',{exact:true}).fill('');
+  await clearedSearch;
   await navigate(owner.page,'Próximas');
   await owner.page.locator('.trip-card').filter({hasText:'Segunda aventura'}).waitFor();
   assert.equal(await owner.page.locator('.trip-card').filter({hasText:'Viagem de teste'}).count(),0);
@@ -1207,7 +1215,10 @@ try {
   assert.equal(trips.has(tripC.id),false);
   assert.equal([...expenses.values()].some(value=>value.trip_id===tripC.id),false);
   passed('A exclusão exige confirmação, explica a migração pendente e remove a viagem e seus gastos também dos aparelhos compartilhados.');
+  await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip: tripB, activities, trips, expenses, root });
+  passed('Relatório PNG: conteúdo e paginação, downloads e bytes iguais à prévia, filtros, viagem isolada, compartilhamento simulado, celular em pé e PWA offline.');
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.stack : 'Falha no teste de navegador.');
   console.error(`Chamadas à fixture: ${rpcCalls.join(', ') || '(nenhuma)'}`);

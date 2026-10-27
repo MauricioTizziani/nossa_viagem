@@ -1,6 +1,6 @@
 import type { Trip, Activity, Expense, TripCard, AuthorizedCollection } from './types';
 import { coerceInitialBudgetCents } from './budget';
-export type Snapshot = { trip: Trip; activities: Activity[]; expenses: Expense[]; syncedAt: string; userId: string; role: 'owner' | 'member'; complete?: boolean; expensesReady?: boolean };
+export type Snapshot = { trip: Trip; activities: Activity[]; expenses: Expense[]; syncedAt: string; userId: string; role: 'owner' | 'member'; complete?: boolean; scheduleComplete?: boolean; expensesReady?: boolean };
 export type TripsSnapshot = { trips: TripCard[]; collections: AuthorizedCollection[]; syncedAt: string; userId: string; complete: boolean };
 const project = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'unconfigured';
 // Retain the namespace to keep this device's previously authorized snapshot readable.
@@ -51,7 +51,7 @@ export function readSnapshot(userId: string, selectedTripId?: string): Snapshot 
     const initial_budget_cents = coerceInitialBudgetCents(snapshot.trip.initial_budget_cents);
     // Older snapshots were unpaginated and may only contain the first server page.
     const complete = snapshot.complete === true;
-    return { ...snapshot, trip: { ...snapshot.trip, destination: snapshot.trip.destination ?? '', initial_budget_cents }, activities: snapshot.activities.map(item => ({ ...item, observation: item.observation ?? null })), expenses, complete, expensesReady: snapshot.expensesReady ?? snapshot.expenses !== undefined } as Snapshot;
+    return { ...snapshot, trip: { ...snapshot.trip, destination: snapshot.trip.destination ?? '', initial_budget_cents }, activities: snapshot.activities.map(item => ({ ...item, observation: item.observation ?? null })), expenses, complete, scheduleComplete: snapshot.scheduleComplete === true || complete, expensesReady: snapshot.expensesReady ?? snapshot.expenses !== undefined } as Snapshot;
   } catch { return null; }
 }
 export function readOfflineSnapshot(tripId?: string): Snapshot | null {

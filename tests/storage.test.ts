@@ -127,6 +127,7 @@ test('cache rejects mixed-trip records and identifies pre-pagination snapshots a
   const legacy = snapshot('couple', 'a');
   saveSnapshot(legacy);
   assert.equal(readSnapshot('couple', 'a')?.complete, false);
+  assert.equal(readSnapshot('couple', 'a')?.scheduleComplete, false);
   const expense = { id: 'e', trip_id: 'b', description: 'Pagamento', category: 'Outros' as const, amount_cents: 1, expense_date: '2026-10-08', activity_id: null, notes: null, version: 1 };
   saveSnapshot({ ...legacy, expenses: [expense] });
   assert.deepEqual(readSnapshot('couple', 'a')?.expenses, []);
@@ -134,6 +135,15 @@ test('cache rejects mixed-trip records and identifies pre-pagination snapshots a
   const key = storage.keys().find(item => item.endsWith(':couple:a'))!;
   storage.setItem(key, JSON.stringify({ ...legacy, expenses: [expense] }));
   assert.equal(readSnapshot('couple', 'a'), null);
+});
+
+test('a complete schedule may be exported offline independently of missing expenses; legacy complete copies are recognized', () => {
+  localStorage.clear();
+  saveSnapshot({ ...snapshot('couple', 'a'), scheduleComplete: true, complete: false, expensesReady: false });
+  assert.equal(readSnapshot('couple', 'a')?.complete, false);
+  assert.equal(readSnapshot('couple', 'a')?.scheduleComplete, true);
+  saveSnapshot({ ...snapshot('couple', 'b'), complete: true });
+  assert.equal(readSnapshot('couple', 'b')?.scheduleComplete, true);
 });
 test('updating cached metadata does not change the locally remembered open trip', () => {
   localStorage.clear();

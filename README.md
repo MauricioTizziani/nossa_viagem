@@ -116,6 +116,20 @@ O orçamento inicial não é decrementado e os saldos não são gravados à part
 
 Gastos têm descrição, categoria, valor positivo, data de calendário, atividade opcional e observações. O pagamento pertence à viagem selecionada mesmo quando ocorreu fora do período. Excluir uma atividade mantém os gastos, removendo apenas o vínculo. Filtros alteram subtotais; os totais gerais sempre consideram todos os registros da viagem, inclusive além da primeira página do banco.
 
+## Relatório do cronograma em PNG
+
+Na viagem desejada, abra **Cronograma → Gerar relatório**. Selecione o cronograma completo (padrão) ou somente as atividades dos filtros atuais e clique em **Gerar relatório**. Confira todas as páginas da prévia; **Ampliar** permite ler o arquivo na resolução original. **Conferir conteúdo em texto** oferece uma alternativa acessível à imagem.
+
+O relatório contém data e hora no fuso da viagem, orçamento previsto, nome completo, lugar e endereço salvos, tipo e observação. O resumo soma apenas os orçamentos previstos das atividades exportadas, sem alterar gastos, saldo ou orçamento inicial. O PNG tem fundo branco e dimensões fixas de **2000 × 1414**, inclusive em celular em pé. Conteúdo extenso continua em páginas horizontais numeradas, com identificação da atividade nas continuações. A geração lê todas as páginas autorizadas do banco e verifica alterações durante a consulta.
+
+Use **Baixar PNG** em cada página ou **Baixar todas as páginas (ZIP)** para salvar o conjunto. O botão **Enviar pelo WhatsApp** abre o compartilhamento nativo de arquivos quando o navegador permite: selecione WhatsApp, destinatário e confirme o envio. Em aparelhos que não aceitam várias imagens juntas, use **Compartilhar página** em cada imagem. Se anexos não forem suportados, baixe os PNGs e anexe-os manualmente à conversa. O aplicativo não confirma a entrega ao destinatário. Em produção, use HTTPS; a política `web-share=(self)` permite o compartilhamento no próprio aplicativo.
+
+Prévia, download e compartilhamento usam os mesmos arquivos PNG, preparados antes do clique de compartilhamento. Uma alteração detectada no cronograma pede **Atualizar relatório**; falha ou cancelamento mantém a prévia disponível. A geração ocorre localmente, sem bucket público, link de acesso ou envio de dados a um serviço de imagens.
+
+Offline, a geração exige uma cópia do cronograma comprovadamente completa e informa a última sincronização no relatório. Cópias antigas ou parciais exigem nova sincronização; indisponibilidade dos gastos não impede um relatório de cronograma completo. O envio pelo WhatsApp exige conexão.
+
+Os testes de relatório em `tests/report-browser.mjs` integram `npm run test:app` (ou `npm run test:app -- --report-only` para verificar só o relatório): Chrome de computador, tela emulada de 390 × 844 em pé, PNG real e dimensões, textos longos/acentos/quebras de linha, continuação, filtros, paginação de consultas, isolamento entre viagens, ZIP, igualdade dos bytes da prévia/download/arquivos compartilhados, erros, cancelamento, bloqueio de cliques duplicados e shell PWA offline. A Web Share API é simulada nesses testes para inspecionar os arquivos; eles não comprovam envio real ao WhatsApp. Safari/iPhone, Android físico e PWA instalada devem ser conferidos em aparelhos reais no endereço HTTPS publicado.
+
 ## Sincronização, conflitos e consulta offline
 
 Dados confirmados e histórico permanecem no Supabase. As gravações exigem internet e confirmação do servidor. UUIDs estáveis evitam duplicação em repetições de cadastro; alterações concorrentes usam controle de versão e oferecem carregar a versão atual.
