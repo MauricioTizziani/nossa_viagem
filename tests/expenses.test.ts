@@ -52,7 +52,7 @@ test("linking an expense to an activity never changes the total or counts it twi
   const comparison = compareActivityExpenses(activity("jantar", 15000), [...linked, expense("vinho", 8800, "Alimentação", "2026-10-10", { activity_id: "jantar" })]);
   assert.deepEqual(comparison, { totalCents: 16800, count: 2, budgetCents: 15000, differenceCents: 1800 });
   assert.match(describeActivitySpending(comparison), /2 gastos vinculados: R\$\s168,00 · R\$\s18,00 acima do previsto até agora/);
-  assert.match(describeActivitySpending(compareActivityExpenses(activity("jantar", 20000), linked)), /abaixo do previsto até agora/);
+  assert.match(describeActivitySpending(compareActivityExpenses(activity("jantar", 20000), linked)), /abaixo do previsto até agora\. Diferença não reservada\./);
   assert.match(describeActivitySpending(compareActivityExpenses(activity("jantar", 8000), linked)), /igual ao previsto até agora/);
 });
 
@@ -60,10 +60,12 @@ test("undefined budgets and missing expenses are never treated as zero or as a f
   const undecided = compareActivityExpenses(activity("passeio", null), [expense("ingresso", 5000, "Passeios e lazer", "2026-10-11", { activity_id: "passeio" })]);
   assert.equal(undecided.differenceCents, null);
   assert.equal(undecided.totalCents, 5000);
-  assert.match(describeActivitySpending(undecided), /orçamento a definir/);
+  assert.match(describeActivitySpending(undecided), /sem orçamento original; sem reserva adicional/);
   const none = compareActivityExpenses(activity("jantar", 15000), all);
   assert.deepEqual(none, { totalCents: 0, count: 0, budgetCents: 15000, differenceCents: -15000 });
-  assert.equal(describeActivitySpending(none), "Nenhum gasto registrado");
+  assert.match(describeActivitySpending(none), /R\$\s150,00 reservados — ainda sem gastos registrados\./);
+  assert.match(describeActivitySpending(compareActivityExpenses(activity("gratuita", 0), [])), /R\$\s0,00 reservados — ainda sem gastos registrados\./);
+  assert.match(describeActivitySpending(compareActivityExpenses(activity("incerta", null), [])), /Orçamento a definir — ainda sem gastos registrados; possíveis custos não estimados\./);
 });
 
 test("expenses sort by date descending with a stable creation tiebreak and move when the date changes", () => {

@@ -1,5 +1,5 @@
 /* Only the public app shell is cached. Private trip snapshots are session-scoped by the client. */
-const SHELL_CACHE = "nossa-viagem-shell-88c59aff70fc5a54204a";
+const SHELL_CACHE = "nossa-viagem-shell-a8721612bf3b21659a31";
 const SHELL_FILES = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-192.png", "/icons/maskable-512.png", "/logo.png"];
 
 function isStaticAsset(url) {

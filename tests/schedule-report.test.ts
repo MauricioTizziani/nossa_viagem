@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createScheduleReport, describeReportFilters, displayReportDay, paginateReport, REPORT_COLUMNS, REPORT_HEIGHT, REPORT_LINE_HEIGHT, REPORT_CELL_PADDING, REPORT_WIDTH, scheduleReportFingerprint, wrapReportText } from '../lib/scheduleReport';
 import { createReportZip } from '../lib/reportZip';
-import { EMPTY_PLACE, type Activity, type Trip } from '../lib/types';
+import { tripBudgetView } from '../lib/budget';
+import { EMPTY_PLACE, type Activity, type Expense, type Trip } from '../lib/types';
 
 const trip: Trip = { id: 'trip-a', name: 'Férias / São João: 🌅', destination: 'São Paulo', start_date: '2026-11-08', end_date: '2026-11-10', timezone: 'America/Manaus', initial_budget_cents: 90000, person_one: null, person_two: null, version: 1 };
 const activity = (id: string, changes: Partial<Activity> = {}): Activity => ({ ...EMPTY_PLACE, id, trip_id: trip.id, starts_at: '2026-11-09T02:45:00Z', budget_cents: null, name: `Atividade ${id}`, observation: null, type: 'Atividade', version: 1, ...changes });
@@ -24,6 +25,38 @@ test('report uses the selected trip zone, saved places and planned integer cents
   assert.equal(report.filename, 'cronograma-ferias-sao-joao-completo');
   assert.match(report.header.join('\n'), /08\/11\/2026 22:00/);
   assert.ok(!JSON.stringify(report).includes(trip.id));
+});
+
+test('complete and daily reports retain original estimates after linked spending releases the reservation', () => {
+  const activities = [
+    activity('paid', { budget_cents: 20000, observation: 'Manter a observação original.' }),
+    activity('zero', { budget_cents: 0 }),
+    activity('undefined'),
+  ];
+  const expenses: Expense[] = [{
+    id: 'expense', trip_id: trip.id, description: 'Gasto confirmado', category: 'Outros',
+    amount_cents: 13200, expense_date: '2026-11-08', activity_id: 'paid', notes: 'Nota original', version: 1,
+  }];
+  const reportSource = source(activities);
+  const original = structuredClone({ reportSource, expenses });
+  const budget = tripBudgetView(trip, activities, expenses);
+  assert.equal(budget.spentCents, 13200);
+  assert.equal(budget.pendingCents, 0);
+  assert.equal(budget.plannedCents, 20000);
+
+  for (const report of [
+    createScheduleReport(reportSource, 'complete'),
+    createScheduleReport(reportSource, { kind: 'day', day: '2026-11-08' }),
+  ]) {
+    const row = (id: string) => report.rows.find(value => value.cells[2] === `Atividade ${id}`)!;
+    assert.match(row('paid').cells[1], /R\$\s200,00/);
+    assert.equal(row('paid').cells[5], 'Manter a observação original.');
+    assert.match(row('zero').cells[1], /R\$\s0,00/);
+    assert.equal(row('undefined').cells[1], 'A definir');
+    assert.match(report.summary.join('\n'), /Total previsto das atividades exportadas: R\$\s200,00/);
+    assert.match(report.summary.join('\n'), /1 atividade com orçamento “A definir”/);
+  }
+  assert.deepEqual({ reportSource, expenses }, original);
 });
 
 test('a selected day includes exactly its trip-timezone date, preserves midnight boundaries and ignores filters', () => {

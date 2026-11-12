@@ -104,7 +104,7 @@ export function SpendingFollowUp({ view, offline = false, filtered = false, onDe
 }
 
 export function ScheduleBudget({ view, offline = false, filtered = false, onDefineBudget }: BudgetPanelProps) {
-  const pendingNote = undefinedBudgetMessage(view.undefinedBudgetCount);
+  const pendingNote = undefinedBudgetMessage(view);
   const spendingAlert = view.spendingSituation === "over" ? spendingStatusLabel(view) : null;
   const planningAlert = view.planningShortfallCents !== null ? planningShortfallLabel(view.planningShortfallCents) : null;
   const calm = !spendingAlert && !planningAlert ? scheduleCalmLabel(view) : null;
@@ -157,7 +157,7 @@ export function ScheduleBudget({ view, offline = false, filtered = false, onDefi
 const flowRow = "flex flex-wrap items-end justify-between gap-x-5 gap-y-2 py-3";
 
 export function BudgetFlow({ view, offline = false, onDefineBudget }: Omit<BudgetPanelProps, "filtered">) {
-  const pendingNote = undefinedBudgetMessage(view.undefinedBudgetCount);
+  const pendingNote = undefinedBudgetMessage(view);
   const spendingAlert = view.spendingSituation === "over" ? spendingStatusLabel(view) : null;
   const planningAlert = view.planningShortfallCents !== null ? planningShortfallLabel(view.planningShortfallCents) : null;
   const freeOver = view.freeCents !== null && view.freeCents < 0;
@@ -180,7 +180,7 @@ export function BudgetFlow({ view, offline = false, onDefineBudget }: Omit<Budge
           <span className={`${money} text-[28px] sm:text-[32px] ${availableOver ? "text-[#A43F56]" : "text-[#125E67]"}`} data-testid="budget-flow-available">{balanceText(view.availableCents)}</span>
         </li>
         <li className={flowRow}>
-          <span className="text-[13px] font-semibold text-[#4F7276]">4. Menos planejamento ainda pendente</span>
+          <span className="text-[13px] font-semibold text-[#4F7276]">4. Menos reservas das atividades sem gastos</span>
           <span className={`${money} text-[22px] text-[#125E67] sm:text-[26px]`} data-testid="budget-flow-pending">{totalText(view.pendingCents)}</span>
         </li>
         <li className={`${flowRow} rounded-[10px] bg-[#EBF3F4] px-4`}>
@@ -197,7 +197,7 @@ export function BudgetFlow({ view, offline = false, onDefineBudget }: Omit<Budge
       {!spendingAlert && !planningAlert && view.spendingSituation !== "unknown" && view.spendingSituation !== "undefined" && <StatusLine testId="budget-flow-status" variant={statusVariant(view.planningSituation)}>{scheduleCalmLabel(view)}</StatusLine>}
 
       <div className="mt-5 border-t border-[#DCEAEC] px-1 pb-1 pt-5">
-        <p className="text-[13px] font-semibold text-[#4F7276]">Projeção de custo total</p>
+        <p className="text-[13px] font-semibold text-[#4F7276]">Projeção com os valores conhecidos</p>
         <p className="mt-2 text-[28px] font-semibold leading-tight tabular-nums tracking-[-0.04em] text-[#125E67]" data-testid="budget-flow-projection">{totalText(view.projectedCents)}</p>
         <p className="mt-2 text-[13px] leading-6 text-[#4F7276]">{PROJECTION_NOTE}</p>
       </div>

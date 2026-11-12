@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityPendingCents, formatBudgetInput, parseInitialBudgetCents, planningShortfallLabel, scheduleCalmLabel, spendingStatusLabel, tripBudgetView, undefinedBudgetMessage } from "../lib/budget";
+import { activityPendingCents, formatBudgetInput, parseInitialBudgetCents, pendingReservationCents, planningShortfallLabel, scheduleCalmLabel, spendingStatusLabel, tripBudgetView, undefinedBudgetMessage } from "../lib/budget";
 import { filterActivities, formatCurrency, summarizeActivities, validateTripInput } from "../lib/domain";
 import { filterExpenses, summarizeExpenses } from "../lib/expenses";
 import { EMPTY_PLACE, type Activity, type Expense, type ExpenseCategory, type Trip } from "../lib/types";
@@ -61,30 +61,30 @@ test("scenario 2: more unlinked spending can leave the plan uncovered without ex
   assert.notEqual(spendingStatusLabel(view), planningShortfallLabel(view.planningShortfallCents!));
 });
 
-test("scenario 3: a linked expense reduces that activity's reservation and is not counted twice", () => {
+test("a linked expense replaces that activity's reservation and is not counted twice", () => {
   const dinner = activity("jantar", 20000, "Refeição", "Jantar");
   const paid = expense("conta", 15000, { activity_id: "jantar" });
   const view = tripBudgetView(trip(200000), [dinner], [paid]);
   assert.equal(view.spentCents, 15000);
   assert.equal(view.availableCents, 185000);
-  assert.equal(activityPendingCents(dinner, [paid]), 5000);
-  assert.equal(view.pendingCents, 5000);
-  assert.equal(view.freeCents, 180000);
-  assert.equal(view.projectedCents, 20000);
+  assert.equal(activityPendingCents(dinner, [paid]), 0);
+  assert.equal(view.pendingCents, 0);
+  assert.equal(view.freeCents, 185000);
+  assert.equal(view.projectedCents, 15000);
   assert.equal(dinner.budget_cents, 20000);
   assert.notEqual(view.projectedCents, 20000 + 15000);
   assert.notEqual(view.freeCents, 200000 - 15000 - 20000);
 });
 
-test("a linked activity of R$ 500 with R$ 200 spent keeps R$ 300 reserved", () => {
+test("a linked activity of R$ 500 with R$ 200 spent leaves no estimate reserved", () => {
   const tour = activity("passeio", 50000);
   const ticket = expense("ingresso", 20000, { activity_id: "passeio" });
   const view = tripBudgetView(trip(200000), [tour], [ticket]);
   assert.equal(view.availableCents, 180000);
-  assert.equal(view.pendingCents, 30000);
-  assert.equal(view.freeCents, 150000);
+  assert.equal(view.pendingCents, 0);
+  assert.equal(view.freeCents, 180000);
   assert.equal(tour.budget_cents, 50000);
-  assert.equal(view.projectedCents, 50000);
+  assert.equal(view.projectedCents, 20000);
 });
 
 test("scenario 4: an overrun on one activity does not consume the reservation of another", () => {
@@ -102,7 +102,7 @@ test("scenario 4: an overrun on one activity does not consume the reservation of
   assert.notEqual(view.pendingCents, Math.max(100000 - 70000, 0));
 });
 
-test("several expenses linked to the same activity are summed before the reservation is capped at zero", () => {
+test("several expenses linked to the same activity are summed without another reservation", () => {
   const meal = activity("jantar", 20000, "Refeição");
   const expenses = [expense("entrada", 8000, { activity_id: "jantar" }), expense("prato", 7000, { activity_id: "jantar" }), expense("sobremesa", 9000, { activity_id: "jantar" })];
   assert.equal(activityPendingCents(meal, expenses), 0);
@@ -125,9 +125,9 @@ test("an undefined activity budget adds no invented reservation, while its expen
   assert.equal(view.spentCents, 5000);
   assert.equal(view.availableCents, 195000);
   assert.equal(view.freeCents, 175000);
-  assert.equal(undefinedBudgetMessage(1), "Há 1 atividade com orçamento a definir. O planejamento está incompleto e os indicadores consideram apenas os valores conhecidos.");
-  assert.equal(undefinedBudgetMessage(3), "Há 3 atividades com orçamento a definir. O planejamento está incompleto e os indicadores consideram apenas os valores conhecidos.");
-  assert.match(undefinedBudgetMessage(1)!, /valores conhecidos/);
+  assert.equal(view.unestimatedActivityCount, 0);
+  assert.equal(view.unbudgetedSpentActivityCount, 1);
+  assert.match(undefinedBudgetMessage(view)!, /1 atividade.*gastos registrados.*orçamento original/);
 });
 
 test("name, category and date do not create a link, and a past activity stays reserved", () => {
@@ -219,6 +219,8 @@ test("unknown expenses are not replaced by zero, so no balance looks available",
   assert.equal(view.availableCents, null);
   assert.equal(view.freeCents, null);
   assert.equal(view.projectedCents, null);
+  assert.equal(view.unestimatedActivityCount, null);
+  assert.equal(view.unbudgetedSpentActivityCount, null);
   assert.equal(view.spendingSituation, "unknown");
   assert.equal(view.planningSituation, "unknown");
   assert.notEqual(view.availableCents, 200000);
@@ -271,7 +273,9 @@ test("editing an expense replaces its amount, and deleting it restores the balan
   assert.equal(before.spentCents, 15000);
   assert.equal(edited.spentCents, 5000);
   assert.equal(edited.availableCents, 195000);
-  assert.equal(edited.pendingCents, 15000);
+  assert.equal(before.pendingCents, 0);
+  assert.equal(edited.pendingCents, 0);
+  assert.equal(edited.freeCents, 195000);
   assert.equal(edited.initialCents, 200000);
   assert.equal(meal.budget_cents, 20000);
   const removed = tripBudgetView(trip(200000), [meal], []);
@@ -290,24 +294,24 @@ test("moving a link keeps the financial balance and only moves the affected rese
   const moved = tripBudgetView(trip(200000), [first, second], [{ ...paid, activity_id: "b" }]);
   assert.equal(moved.spentCents, before.spentCents);
   assert.equal(moved.availableCents, before.availableCents);
-  assert.equal(activityPendingCents(first, [paid]), 20000);
+  assert.equal(activityPendingCents(first, [paid]), 0);
   assert.equal(activityPendingCents(first, [{ ...paid, activity_id: "b" }]), 50000);
   assert.equal(activityPendingCents(second, [{ ...paid, activity_id: "b" }]), 0);
-  assert.equal(before.pendingCents, 40000);
-  assert.equal(before.freeCents, 130000);
+  assert.equal(before.pendingCents, 20000);
+  assert.equal(before.freeCents, 150000);
   assert.equal(moved.pendingCents, 50000);
   assert.equal(moved.freeCents, 120000);
   assert.equal(paid.amount_cents, 30000);
 });
 
-test("deleting an activity drops its reservation and keeps the expense in the financial balance", () => {
+test("deleting an activity keeps its spending counted and other reservations intact", () => {
   const first = activity("a", 50000);
   const second = activity("b", 50000);
   const paid = expense("conta", 20000, { activity_id: "a" });
   const before = tripBudgetView(trip(200000), [first, second], [paid]);
   const unlinked = tripBudgetView(trip(200000), [second], [{ ...paid, activity_id: null }]);
   const orphan = tripBudgetView(trip(200000), [second], [paid]);
-  assert.equal(before.pendingCents, 80000);
+  assert.equal(before.pendingCents, 50000);
   assert.equal(unlinked.spentCents, 20000);
   assert.equal(unlinked.availableCents, 180000);
   assert.equal(unlinked.pendingCents, 50000);
@@ -324,7 +328,7 @@ test("repeating the calculation does not decrement the initial budget or duplica
   const first = tripBudgetView(trip(200000), activities, expenses);
   const second = tripBudgetView(trip(200000), activities, expenses);
   assert.equal(first.spentCents, 20000);
-  assert.equal(first.pendingCents, 30000);
+  assert.equal(first.pendingCents, 0);
   assert.equal(first.availableCents, 180000);
   assert.equal(second.availableCents, first.availableCents);
   assert.equal(second.freeCents, first.freeCents);
@@ -341,7 +345,7 @@ test("filters, other trips and a visible page cannot replace the trip totals", (
   const view = tripBudgetView(trip(200000), [...activities, { ...activity("foreign", 900000), trip_id: "other-trip" }], [...expenses, expense("foreign", 900000, { trip_id: "other-trip", activity_id: "meal" })]);
   assert.equal(view.plannedCents, 230000);
   assert.equal(view.spentCents, 80000);
-  assert.equal(view.pendingCents, 170000, "the foreign expense does not reduce this trip's reservation");
+  assert.equal(view.pendingCents, 80000, "only the linked activity loses its reservation");
   assert.equal(view.availableCents, 120000);
   const filteredActivities = filterActivities(activities, { type: "Refeição" }, "America/Sao_Paulo");
   const filteredExpenses = filterExpenses(expenses, { category: "Combustível" });
@@ -351,4 +355,173 @@ test("filters, other trips and a visible page cannot replace the trip totals", (
   assert.notEqual(page.spentCents, view.spentCents);
   assert.notEqual(page.pendingCents, view.pendingCents);
   assert.equal(view.availableCents, 120000);
+});
+
+test("acceptance scenarios 1–3: the first linked expense replaces the estimate and later spending only reduces the balance", () => {
+  const meal = activity("feira", 20000);
+  const first = expense("first", 13200, { activity_id: meal.id });
+  const later = expense("later", 2000, { activity_id: meal.id });
+  const before = tripBudgetView(trip(100000), [meal], []);
+  assert.equal(before.availableCents, 100000);
+  assert.equal(before.pendingCents, 20000);
+  assert.equal(before.freeCents, 80000);
+  assert.equal(before.projectedCents, 20000);
+
+  const paid = tripBudgetView(trip(100000), [meal], [first]);
+  assert.equal(paid.spentCents, 13200);
+  assert.equal(paid.availableCents, 86800);
+  assert.equal(paid.pendingCents, 0);
+  assert.equal(paid.freeCents, 86800);
+  assert.equal(paid.projectedCents, 13200);
+  assert.equal(paid.reservedPercent, 0);
+  assert.equal(paid.initialCents, 100000);
+
+  const paidAgain = tripBudgetView(trip(100000), [meal], [first, later]);
+  assert.equal(paidAgain.spentCents, 15200);
+  assert.equal(paidAgain.availableCents, 84800);
+  assert.equal(paidAgain.pendingCents, 0);
+  assert.equal(paidAgain.freeCents, 84800);
+  assert.equal(paidAgain.projectedCents, 15200);
+  assert.equal(meal.budget_cents, 20000);
+});
+
+test("acceptance scenario 4: another activity can reserve the unused estimate without changing available money", () => {
+  const first = activity("feira", 20000);
+  const expenses = [expense("paid", 13200, { activity_id: first.id })];
+  const before = tripBudgetView(trip(100000), [first], expenses);
+  const next = activity("another", 6800);
+  const after = tripBudgetView(trip(100000), [first, next], expenses);
+  assert.equal(after.availableCents, before.availableCents);
+  assert.equal(after.availableCents, 86800);
+  assert.equal(activityPendingCents(first, expenses), 0);
+  assert.equal(activityPendingCents(next, expenses), 6800);
+  assert.equal(after.pendingCents, 6800);
+  assert.equal(after.freeCents, 80000);
+  assert.equal(after.spentCents, 13200);
+  assert.equal(after.initialCents, 100000);
+});
+
+test("acceptance scenario 5: spending beyond the activity estimate is charged only once", () => {
+  const meal = activity("meal", 20000);
+  const view = tripBudgetView(trip(100000), [meal], [expense("paid", 25000, { activity_id: meal.id })]);
+  assert.equal(view.spentCents, 25000);
+  assert.equal(view.availableCents, 75000);
+  assert.equal(view.pendingCents, 0);
+  assert.equal(view.freeCents, 75000);
+  assert.equal(view.projectedCents, 25000);
+  assert.equal(view.plannedCents, 20000);
+  assert.equal(view.spendingExcessCents, null);
+  assert.equal(view.planningShortfallCents, null);
+});
+
+test("acceptance scenario 6: the supplied totals release R$ 239.94 without creating additional money", () => {
+  // Isolated fixture: the six reported rows are exact. Unprovided rows below
+  // are synthetic, chosen only to reproduce the supplied global totals.
+  const reported = [
+    { id: "feira", budget: 20000, paid: 13200 },
+    { id: "museu", budget: 8300, paid: 5400 },
+    { id: "tacos", budget: 14000, paid: 9950 },
+    { id: "cafe", budget: 6000, paid: 2420 },
+    { id: "sui-yuan", budget: 9000, paid: 8500 },
+    { id: "shopping", budget: 14000, paid: 7836 },
+  ];
+  const activities = [
+    ...reported.map(({ id, budget }) => activity(id, budget)),
+    activity("synthetic-other-estimates", 29800),
+    activity("zero", 0),
+    activity("centro", null),
+    ...[1, 2, 3].map((index) => activity(`unestimated-${index}`, null)),
+  ];
+  const expenses = [
+    ...reported.map(({ id, paid }) => expense(`paid-${id}`, paid, { activity_id: id })),
+    expense("synthetic-other-paid", 40000, { activity_id: "synthetic-other-estimates" }),
+    expense("paid-centro", 6400, { activity_id: "centro" }),
+    expense("synthetic-unlinked", 61520),
+  ];
+  const source = { trip: trip(170000), activities, expenses };
+  const saved = structuredClone(source);
+  const oldReservation = reported.reduce((sum, row) => sum + row.budget - row.paid, 0);
+  assert.equal(oldReservation, 23994);
+  assert.equal(170000 - 155226 - oldReservation, -9220);
+
+  const view = tripBudgetView(source.trip, activities, expenses);
+  assert.equal(view.initialCents, 170000);
+  assert.equal(view.spentCents, 155226);
+  assert.equal(view.plannedCents, 101100);
+  assert.equal(view.availableCents, 14774);
+  assert.equal(view.pendingCents, 0);
+  assert.equal(view.freeCents, 14774);
+  assert.equal(view.projectedCents, 155226);
+  assert.equal(view.reservedPercent, 0);
+  assert.equal(view.planningShortfallCents, null);
+  assert.equal(view.planningSituation, "within");
+  assert.equal(view.undefinedBudgetCount, 4);
+  assert.equal(view.unestimatedActivityCount, 3);
+  assert.equal(view.unbudgetedSpentActivityCount, 1);
+  assert.match(undefinedBudgetMessage(view)!, /3 atividades.*sem orçamento.*sem gastos/);
+  assert.match(undefinedBudgetMessage(view)!, /1 atividade.*gastos registrados.*orçamento original/);
+  assert.notEqual(view.freeCents, 38768, "released reservation is never a credit");
+  assert.deepEqual(source, saved, "recalculating preserves the initial budget and historical records");
+});
+
+test("deleting one of several linked expenses keeps the reservation at zero until the last is removed", () => {
+  const meal = activity("meal", 20000);
+  const first = expense("first", 10000, { activity_id: meal.id });
+  const last = expense("last", 3200, { activity_id: meal.id });
+  const before = tripBudgetView(trip(100000), [meal], [first, last]);
+  const oneLeft = tripBudgetView(trip(100000), [meal], [last]);
+  const none = tripBudgetView(trip(100000), [meal], []);
+  assert.equal(before.pendingCents, 0);
+  assert.equal(oneLeft.spentCents, 3200);
+  assert.equal(oneLeft.pendingCents, 0);
+  assert.equal(oneLeft.freeCents, 96800);
+  assert.equal(none.spentCents, 0);
+  assert.equal(none.pendingCents, 20000);
+  assert.equal(none.freeCents, 80000);
+});
+
+test("zero is a known estimate and undefined budgets are split according to linked spending", () => {
+  const zero = activity("zero", 0);
+  const unknown = activity("unknown", null);
+  const paidUnknown = activity("paid-unknown", null);
+  const expenses = [expense("paid", 1, { activity_id: paidUnknown.id })];
+  const view = tripBudgetView(trip(10000), [zero, unknown, paidUnknown], expenses);
+  assert.equal(view.plannedCents, 0);
+  assert.equal(view.pendingCents, 0);
+  assert.equal(view.projectedCents, 1);
+  assert.equal(view.freeCents, 9999);
+  assert.equal(view.undefinedBudgetCount, 2);
+  assert.equal(view.unestimatedActivityCount, 1);
+  assert.equal(view.unbudgetedSpentActivityCount, 1);
+  assert.match(undefinedBudgetMessage(view)!, /1 atividade.*sem orçamento.*sem gastos/);
+  assert.equal(undefinedBudgetMessage(tripBudgetView(trip(10000), [zero], [])), null);
+
+  const unavailable = tripBudgetView(trip(10000), [unknown], null);
+  assert.equal(unavailable.undefinedBudgetCount, 1);
+  assert.equal(unavailable.unestimatedActivityCount, null);
+  assert.equal(unavailable.unbudgetedSpentActivityCount, null);
+  assert.match(undefinedBudgetMessage(unavailable)!, /carregamento dos gastos/);
+});
+
+test("reservation uses linked record count and validates integer inputs", () => {
+  assert.equal(pendingReservationCents(20000, 0), 20000);
+  assert.equal(pendingReservationCents(20000, 1), 0);
+  assert.equal(pendingReservationCents(20000, 2), 0);
+  assert.equal(pendingReservationCents(0, 0), 0);
+  assert.equal(pendingReservationCents(null, 0), 0);
+  assert.equal(pendingReservationCents(null, 1), 0);
+  assert.throws(() => pendingReservationCents(20000, -1));
+  assert.throws(() => pendingReservationCents(20000, 0.5));
+  assert.throws(() => pendingReservationCents(-1, 0));
+  assert.throws(() => pendingReservationCents(0.5, 0));
+});
+
+test("a foreign trip's linked expense cannot release an activity's reservation", () => {
+  const local = activity("local", 20000);
+  const foreign = expense("foreign", 1000, { trip_id: "other-trip", activity_id: local.id });
+  assert.equal(activityPendingCents(local, [foreign]), 20000);
+  const view = tripBudgetView(trip(100000), [local], [foreign]);
+  assert.equal(view.spentCents, 0);
+  assert.equal(view.pendingCents, 20000);
+  assert.equal(view.freeCents, 80000);
 });

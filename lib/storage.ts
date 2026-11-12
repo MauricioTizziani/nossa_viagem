@@ -51,7 +51,9 @@ export function readSnapshot(userId: string, selectedTripId?: string): Snapshot 
     const initial_budget_cents = coerceInitialBudgetCents(snapshot.trip.initial_budget_cents);
     // Older snapshots were unpaginated and may only contain the first server page.
     const complete = snapshot.complete === true;
-    return { ...snapshot, trip: { ...snapshot.trip, destination: snapshot.trip.destination ?? '', initial_budget_cents }, activities: snapshot.activities.map(item => ({ ...item, observation: item.observation ?? null })), expenses, complete, scheduleComplete: snapshot.scheduleComplete === true || complete, expensesReady: snapshot.expensesReady ?? snapshot.expenses !== undefined } as Snapshot;
+    // Partial/legacy pages remain readable, but cannot establish global spending or missing links.
+    const expensesReady = complete && (snapshot.expensesReady ?? snapshot.expenses !== undefined);
+    return { ...snapshot, trip: { ...snapshot.trip, destination: snapshot.trip.destination ?? '', initial_budget_cents }, activities: snapshot.activities.map(item => ({ ...item, observation: item.observation ?? null })), expenses, complete, scheduleComplete: snapshot.scheduleComplete === true || complete, expensesReady } as Snapshot;
   } catch { return null; }
 }
 export function readOfflineSnapshot(tripId?: string): Snapshot | null {

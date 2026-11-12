@@ -1,7 +1,7 @@
 import { DEFAULT_TIMEZONE, EXPENSE_CATEGORIES, type Activity, type ActivityExpenseComparison, type Expense, type ExpenseCategory, type ExpenseFilters, type ExpenseInput, type ExpenseSummary, type ExpenseTotals } from "./types";
 import { budgetInputValue, dateKey, formatCurrency, isValidDate, parseBudgetCents } from "./domain";
 
-/** Confirmed expenses reduce the trip balance. Only an explicit activity link reduces that activity's pending reservation. */
+/** Confirmed expenses reduce the trip balance. Only an explicit activity link replaces that activity's estimated reservation. */
 export const MAX_EXPENSE_CENTS = 999_999_999_999;
 export const MAX_DESCRIPTION_LENGTH = 200;
 export const MAX_NOTES_LENGTH = 2000;
@@ -105,11 +105,16 @@ export function compareActivityExpenses(activity: Pick<Activity, "id" | "budget_
 
 /** Wording for the schedule detail: a comparison so far, never a closing of the activity. */
 export function describeActivitySpending(comparison: ActivityExpenseComparison): string {
-  if (comparison.count === 0) return "Nenhum gasto registrado";
+  if (comparison.count === 0) {
+    return comparison.budgetCents === null
+      ? "Orçamento a definir — ainda sem gastos registrados; possíveis custos não estimados."
+      : `${formatCurrency(comparison.budgetCents)} reservados — ainda sem gastos registrados.`;
+  }
   const base = `${comparison.count === 1 ? "1 gasto vinculado" : `${comparison.count} gastos vinculados`}: ${formatCurrency(comparison.totalCents)}`;
-  if (comparison.differenceCents === null) return `${base} · orçamento a definir`;
+  if (comparison.differenceCents === null) return `${base} · sem orçamento original; sem reserva adicional.`;
   if (comparison.differenceCents === 0) return `${base} · igual ao previsto até agora`;
-  return `${base} · ${formatCurrency(Math.abs(comparison.differenceCents))} ${comparison.differenceCents > 0 ? "acima" : "abaixo"} do previsto até agora`;
+  const difference = `${base} · ${formatCurrency(Math.abs(comparison.differenceCents))} ${comparison.differenceCents > 0 ? "acima" : "abaixo"} do previsto até agora`;
+  return comparison.differenceCents < 0 ? `${difference}. Diferença não reservada.` : difference;
 }
 
 export function validateExpenseInput(input: ExpenseInput, activities?: Pick<Activity, "id" | "trip_id">[], tripId?: string): ExpenseInput {

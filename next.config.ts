@@ -3,6 +3,9 @@ const nextConfig: NextConfig = {
   distDir: process.env.NOSSA_VIAGEM_BUILD_DIR || '.next',
   poweredByHeader: false,
   devIndicators: false,
+  experimental: {
+    agentUpgrade: 'security',
+  },
   async headers() {
     return [{ source: '/:path*', headers: [
       { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

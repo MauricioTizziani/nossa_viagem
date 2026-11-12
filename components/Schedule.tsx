@@ -14,7 +14,7 @@ import type { ScheduleReportSource } from '../lib/scheduleReport';
 
 interface ScheduleProps {
   activities: Activity[];
-  /** Registered expenses; only an explicit activity link reduces that activity's reservation. */
+  /** Confirmed expenses; an explicit link replaces that activity's estimated reservation. */
   expenses?: Expense[];
   /** False while expenses are missing. Unknown totals stay uncalculated instead of becoming zero. */
   expensesReady?: boolean;

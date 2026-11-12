@@ -106,13 +106,17 @@ Os convites usam o endereço em que o aplicativo está aberto: no Render, o link
 
 O cronograma preserva **Data e hora**, **Orçamento (R$)**, **Nome da atividade**, **Lugar** e **Tipo** (Refeição, Lazer ou Atividade). Lugares podem ser escolhidos no Photon/OpenStreetMap ou informados manualmente. Referências antigas são preservadas.
 
-Para cada viagem, B é o orçamento inicial guardado como referência, G a soma dos gastos confirmados e P o que ainda está reservado nas atividades. A reserva de cada atividade é o máximo entre zero e o orçamento previsto menos os gastos com vínculo explícito. Um excesso em uma atividade não reduz a reserva de outra, e atividade com orçamento a definir não recebe um valor inventado.
+Para cada viagem, B é o orçamento inicial guardado como referência, G a soma dos gastos confirmados e P o que ainda está reservado nas atividades. Uma atividade sem gastos confirmados com vínculo explícito reserva seu orçamento previsto. A partir do primeiro gasto vinculado, o valor realizado substitui a estimativa no cálculo financeiro e a reserva dessa atividade passa a zero. A diferença deixa de ficar reservada para ela, sem criar crédito nem aumentar o saldo disponível. Outros gastos podem ser registrados depois, e o orçamento original continua disponível para comparação e nos relatórios PNG. Não é necessário concluir a atividade nem aguardar sua data.
 
 - Saldo disponível: **D = B − G**. O mesmo valor aparece em Gastos e como orçamento disponível do cronograma.
 - Saldo livre após o planejamento: **D − P**.
 - Projeção de custo: **G + P**, sem somar de novo um gasto já vinculado à atividade.
 
 O orçamento inicial não é decrementado e os saldos não são gravados à parte. Orçamento ausente não vira zero e não gera alerta de excesso. Orçamento zero é válido. Cada viagem é calculada sozinha; filtros e paginação não alteram esses indicadores.
+
+Os cálculos em centavos são centralizados em `lib/budget.ts` e derivados dos registros atuais, inclusive nas viagens existentes. Editar ou excluir um gasto não acumula liberações; excluir o último gasto vinculado restaura a reserva original. Alterar o vínculo recalcula as reservas de origem e destino sem mudar G. Gastos sem atividade reduzem o saldo disponível normalmente, mas não liberam reservas. Atividades sem orçamento e sem gastos são identificadas como custos ainda não estimados; as que já têm gastos mantêm a informação de que não havia orçamento original. A projeção inclui apenas os valores conhecidos e não garante a ausência de custos futuros.
+
+Essa regra é aplicada ao carregar os registros existentes, sem migração nem edição dos dados. Cópias offline antigas ou parciais mantêm os registros disponíveis para consulta, mas precisam de sincronização antes de calcular saldos e reservas globais.
 
 Gastos têm descrição, categoria, valor positivo, data de calendário, atividade opcional e observações. O pagamento pertence à viagem selecionada mesmo quando ocorreu fora do período. Excluir uma atividade mantém os gastos, removendo apenas o vínculo. Filtros alteram subtotais; os totais gerais sempre consideram todos os registros da viagem, inclusive além da primeira página do banco.
 
@@ -160,6 +164,8 @@ npm run test:app
 Os testes de banco executam migrações reais em PostgreSQL local com PGlite. Verificam RLS, reexecução preservando registros e permissões, criação atômica, convites de viagem, coleção e identidade inteira, acesso automático a viagens futuras, idempotência, arquivamento, isolamento, transferências bloqueadas, centavos e conflitos. Não usam banco de produção.
 
 O teste de aplicativo compila em `.next-test`, usa uma simulação HTTP do Supabase exclusivamente em memória e Chrome instalado. Verifica os fluxos da interface, vários contextos de navegador, formulários, troca de viagem, indicadores e consulta offline. Registros fictícios existem somente nessa simulação. As capturas ficam em `artifacts/`. `npm run test:ui` faz uma verificação da interface sem backend configurado.
+
+Para verificar somente as reservas, use `npm run test:app -- --budget-only`. Essa verificação também integra a suíte completa: primeiro gasto, gastos adicionais, edição, exclusão, troca de vínculo, filtros, atualização por foco em outra página e reprodução isolada dos totais de referência (saldo R$ 147,74, reserva R$ 0,00 e 0% reservado). A referência utiliza linhas sintéticas para os registros não fornecidos; não confirma o conteúdo do banco real. A variável `NOSSA_VIAGEM_BUILD_DIR` permite escolher outra pasta de compilação de teste; `NOSSA_VIAGEM_ARTIFACT_ROOT` permite guardar as capturas em outra pasta, preservando arquivos de verificações anteriores.
 
 Antes de uso real, aplique 006 e 007 no Supabase, publique a aplicação com as variáveis públicas corretas e valide um convite em outro aparelho, sincronização remota, revogação administrativa de acesso e instalação em HTTPS. Os testes locais não comprovam Auth/Realtime remotos nem disponibilidade do Photon.
 

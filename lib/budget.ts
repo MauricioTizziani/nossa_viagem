@@ -7,19 +7,19 @@ import type { Activity, Expense } from "./types";
  * B is the initial budget and stays a reference; expenses never decrement it.
  * G is the sum of confirmed expenses. D = B - G is the available balance
  * on Gastos and the budget the schedule is allowed to plan against.
- * Each activity keeps its original budget. Pending reservation is
- * max(budget - expenses linked to that activity, 0). P is the sum of those
- * reservations, so an overrun on one activity cannot reduce another.
+ * Each activity keeps its original budget. That budget is reserved only
+ * until its first confirmed linked expense. Afterwards actual spending
+ * replaces the estimate, so its reservation is zero. P sums reservations.
  * Free balance after planning is D - P. Projected cost is G + P.
  */
 
 export const UNDEFINED_BUDGET_LABEL = "Orçamento inicial não definido";
-export const PLANNING_NOTE = "O planejamento utiliza o saldo que restou após os gastos. Despesas já vinculadas às atividades não são reservadas novamente.";
+export const PLANNING_NOTE = "Atividades sem gastos mantêm o valor previsto reservado. Ao registrar gastos vinculados, o valor realizado substitui essa reserva, deixando a diferença disponível para outros planos.";
 export const SPENDING_NOTE = "Os gastos registrados também reduzem o valor disponível para planejar o cronograma.";
 export const OFFLINE_BUDGET_NOTE = "Valores da última sincronização, sem rascunhos locais. Eles podem estar desatualizados.";
 export const FILTER_BUDGET_NOTE = "Estes indicadores consideram toda a viagem. O subtotal dos filtros não muda esta situação.";
 export const INITIAL_BUDGET_HELP = "Quanto vocês pretendem disponibilizar para a viagem? Cada gasto reduz o saldo disponível para planejar o cronograma.";
-export const PROJECTION_NOTE = "Soma dos gastos registrados com o que ainda está reservado para as atividades. Uma despesa já vinculada não entra de novo.";
+export const PROJECTION_NOTE = "Soma dos gastos registrados com as reservas das atividades ainda sem gastos. Considera os valores conhecidos até agora; novos custos podem surgir.";
 export const ORIGINAL_PLAN_NOTE = "Total original dos orçamentos informados nas atividades. É diferente do valor ainda reservado.";
 export const UNKNOWN_TOTAL_LABEL = "Não foi possível carregar este total. O saldo não foi calculado.";
 export const FULLY_RESERVED_LABEL = "O saldo disponível está totalmente reservado para as atividades.";
@@ -43,6 +43,10 @@ export interface TripBudgetView {
   /** G + P. Null when either total is unknown. Does not add linked expenses twice. */
   projectedCents: number | null;
   undefinedBudgetCount: number;
+  /** No original budget and no confirmed linked expenses. Null while expenses are unknown. */
+  unestimatedActivityCount: number | null;
+  /** No original budget, but already has confirmed linked expenses. */
+  unbudgetedSpentActivityCount: number | null;
   spendingSituation: BudgetSituation;
   /** Positive amount spent beyond B. Null unless spending is over. */
   spendingExcessCents: number | null;
@@ -119,10 +123,26 @@ export function balanceText(cents: number | null): string {
   return cents === null ? "Não calculado" : formatSignedCurrency(cents);
 }
 
-export function undefinedBudgetMessage(count: number): string | null {
-  if (count <= 0) return null;
-  const intro = count === 1 ? "Há 1 atividade com orçamento a definir." : `Há ${count} atividades com orçamento a definir.`;
-  return `${intro} O planejamento está incompleto e os indicadores consideram apenas os valores conhecidos.`;
+export function undefinedBudgetMessage(view: Pick<TripBudgetView, "undefinedBudgetCount" | "unestimatedActivityCount" | "unbudgetedSpentActivityCount">): string | null {
+  if (view.undefinedBudgetCount <= 0) return null;
+  if (view.unestimatedActivityCount === null || view.unbudgetedSpentActivityCount === null) {
+    const intro = view.undefinedBudgetCount === 1 ? "Há 1 atividade sem orçamento original." : `Há ${view.undefinedBudgetCount} atividades sem orçamento original.`;
+    return `${intro} Aguarde o carregamento dos gastos para identificar quais ainda estão sem estimativa.`;
+  }
+  const notes: string[] = [];
+  const unestimated = view.unestimatedActivityCount;
+  if (unestimated > 0) {
+    notes.push(unestimated === 1
+      ? "1 atividade está sem orçamento e sem gastos registrados; seus possíveis custos ainda não estão estimados."
+      : `${unestimated} atividades estão sem orçamento e sem gastos registrados; seus possíveis custos ainda não estão estimados.`);
+  }
+  const spent = view.unbudgetedSpentActivityCount;
+  if (spent > 0) {
+    notes.push(spent === 1
+      ? "1 atividade possui gastos registrados, mas não tinha orçamento original."
+      : `${spent} atividades possuem gastos registrados, mas não tinham orçamento original.`);
+  }
+  return notes.join(" ") || null;
 }
 
 export function spendingStatusLabel(view: TripBudgetView): string {
@@ -173,27 +193,46 @@ function percentOf(totalCents: number, partCents: number): number {
 
 /**
  * What is still reserved for one activity.
- * An undefined budget contributes nothing invented. Linked spending cannot push this below zero.
+ * An undefined budget contributes nothing invented. The first confirmed linked
+ * expense replaces the whole estimate; this never creates a credit or changes history.
  */
-export function pendingReservationCents(budgetCents: number | null, linkedSpentCents: number): number {
-  if (!Number.isSafeInteger(linkedSpentCents) || linkedSpentCents < 0) throw new Error("O total vinculado à atividade é inválido.");
+export function pendingReservationCents(budgetCents: number | null, linkedExpenseCount: number): number {
+  if (!Number.isSafeInteger(linkedExpenseCount) || linkedExpenseCount < 0) throw new Error("A quantidade de gastos vinculados à atividade é inválida.");
   if (budgetCents === null) return 0;
   if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) throw new Error("O orçamento da atividade é inválido.");
-  return Math.max(budgetCents - linkedSpentCents, 0);
+  return linkedExpenseCount === 0 ? budgetCents : 0;
 }
 
-/** Sums only expenses whose activity_id is this activity. Name, category and date never create a link. */
-export function activityPendingCents(activity: Pick<Activity, "id" | "budget_cents">, expenses: Expense[]): number {
-  const linked = summarizeExpenses(expenses.filter((expense) => expense.activity_id === activity.id)).totalCents;
-  return pendingReservationCents(activity.budget_cents, linked);
+/** Only explicit, same-trip links count. Inputs contain confirmed records, never form drafts. */
+export function activityPendingCents(activity: Pick<Activity, "id" | "trip_id" | "budget_cents">, expenses: Expense[]): number {
+  const linkedCount = expenses.filter((expense) => expense.trip_id === activity.trip_id && expense.activity_id === activity.id).length;
+  return pendingReservationCents(activity.budget_cents, linkedCount);
 }
 
-function pendingTotal(activities: Activity[], expenses: Expense[]): number {
-  let pending = 0;
-  for (const activity of activities) {
-    pending = addCents(pending, activityPendingCents(activity, expenses));
+/** One pass over expenses avoids multiplying records when an activity has many expenses. */
+function planningTotals(activities: Activity[], expenses: Expense[]) {
+  const linkedCounts = new Map<string, Map<string, number>>();
+  for (const expense of expenses) {
+    if (expense.activity_id === null) continue;
+    let tripCounts = linkedCounts.get(expense.trip_id);
+    if (!tripCounts) {
+      tripCounts = new Map();
+      linkedCounts.set(expense.trip_id, tripCounts);
+    }
+    tripCounts.set(expense.activity_id, (tripCounts.get(expense.activity_id) ?? 0) + 1);
   }
-  return pending;
+  let pendingCents = 0;
+  let unestimatedActivityCount = 0;
+  let unbudgetedSpentActivityCount = 0;
+  for (const activity of activities) {
+    const count = linkedCounts.get(activity.trip_id)?.get(activity.id) ?? 0;
+    pendingCents = addCents(pendingCents, pendingReservationCents(activity.budget_cents, count));
+    if (activity.budget_cents === null) {
+      if (count === 0) unestimatedActivityCount++;
+      else unbudgetedSpentActivityCount++;
+    }
+  }
+  return { pendingCents, unestimatedActivityCount, unbudgetedSpentActivityCount };
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -233,6 +272,8 @@ export function tripBudgetView(trip: { id?: string; initial_budget_cents: number
       availableCents: null,
       freeCents: null,
       projectedCents: null,
+      unestimatedActivityCount: null,
+      unbudgetedSpentActivityCount: null,
       spendingSituation: "unknown",
       spendingExcessCents: null,
       spendingPercent: null,
@@ -244,13 +285,14 @@ export function tripBudgetView(trip: { id?: string; initial_budget_cents: number
 
   const tripExpenses = uniqueById(sameTrip(expenses));
   const spentCents = summarizeExpenses(tripExpenses).totalCents;
-  const pendingCents = pendingTotal(tripActivities, tripExpenses);
+  const planning = planningTotals(tripActivities, tripExpenses);
+  const { pendingCents } = planning;
   const projectedCents = addCents(spentCents, pendingCents);
   if (initialCents === null) {
     return {
       ...base,
+      ...planning,
       spentCents,
-      pendingCents,
       availableCents: null,
       freeCents: null,
       projectedCents,
@@ -269,8 +311,8 @@ export function tripBudgetView(trip: { id?: string; initial_budget_cents: number
   const planningSituation = situationOf(freeCents);
   return {
     ...base,
+    ...planning,
     spentCents,
-    pendingCents,
     availableCents,
     freeCents,
     projectedCents,

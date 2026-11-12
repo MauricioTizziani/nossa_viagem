@@ -12,8 +12,10 @@ import { dirname, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { verifyScheduleReport } from './report-browser.mjs';
+import { verifyBudgetReservations } from './budget-browser.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const artifactRoot = resolve(root, process.env.NOSSA_VIAGEM_ARTIFACT_ROOT || '.');
 const nextBin = resolve(root, 'node_modules/next/dist/bin/next');
 const fixtureOrigin = 'http://127.0.0.1:54321';
 const appPort = Number(process.env.NOSSA_VIAGEM_TEST_PORT || 3100);
@@ -398,8 +400,8 @@ async function newActivity(page, { name, date = '2030-04-10T09:30', budget = '',
     assert.equal(mapUrl.searchParams.get('mlat'), '-22.8940683');
     const routeUrl = new URL(await dialog.getByRole('link', { name: 'Traçar rota', exact: true }).getAttribute('href'));
     assert.equal(routeUrl.searchParams.get('route'), ';-22.8940683,-43.1794045');
-    await mkdir(resolve(root, 'artifacts'), { recursive: true });
-    await page.screenshot({ path: resolve(root, 'artifacts/photon-selection.png'), fullPage: true });
+    await mkdir(resolve(artifactRoot, 'artifacts'), { recursive: true });
+    await page.screenshot({ path: resolve(artifactRoot, 'artifacts/photon-selection.png'), fullPage: true });
     passed('Photon: limite mínimo, falha com alternativa manual, resposta vazia, cancelamento e seleção pelo teclado com destino correto.');
   }
   await dialog.getByRole('button', { name: 'Salvar atividade', exact: true }).click();
@@ -454,7 +456,7 @@ try {
   fixture.listen(54321, '127.0.0.1');
   await once(fixture, 'listening');
   const env = { ...process.env, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
-    NOSSA_VIAGEM_BUILD_DIR: '.next-test', NEXT_PUBLIC_SUPABASE_URL: fixtureOrigin,
+    NOSSA_VIAGEM_BUILD_DIR: process.env.NOSSA_VIAGEM_BUILD_DIR || '.next-test', NEXT_PUBLIC_SUPABASE_URL: fixtureOrigin,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'test-only-placeholder', NEXT_PUBLIC_PHOTON_URL: 'https://photon.test/api/',
     NEXT_PUBLIC_APP_URL: appOrigin };
   console.log('Preparando build isolado para teste de navegador com dados somente em memória…');
@@ -485,9 +487,12 @@ try {
   assert.equal(rpcCalls.includes('open_shared_trip'), false);
   passed('O convite explícito da coleção abre Minhas viagens e preserva a viagem existente sem conceder acesso público.');
 
-  if (process.argv.includes('--report-only')) {
+  if (process.argv.includes('--budget-only')) {
+    await verifyBudgetReservations({ page: owner.page, context: owner.context, appOrigin, trip, activities, trips, expenses, root: artifactRoot });
+    passed('Reserva: estimativa antes dos gastos, realizados depois, operações locais, atualização por foco em outro aparelho e cenário de referência isolado.');
+  } else if (process.argv.includes('--report-only')) {
     await newActivity(owner.page, { name: 'Base do relatório', budget: '0', manual: true });
-    await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip, activities, trips, expenses, root });
+    await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip, activities, trips, expenses, root: artifactRoot });
     passed('Relatório PNG: conteúdo e paginação, downloads e bytes iguais à prévia, filtros, viagem isolada, compartilhamento simulado, celular em pé e PWA offline.');
   } else {
   await newActivity(owner.page, { name: 'Teste passeio', budget: '0', manual: true });
@@ -686,8 +691,8 @@ try {
   assert.deepEqual(await owner.page.locator('table tbody tr td:first-child').allTextContents(), ['10/04/2030', '09/04/2030', '01/03/2030'], 'most recent expense first, prepaid lodging included');
   await (await button(owner.page, 'Ver detalhes de Teste Airbnb')).click();
   await visibleText(owner.page, 'Pago antecipadamente');
-  await mkdir(resolve(root, 'artifacts'), { recursive: true });
-  await owner.page.screenshot({ path: resolve(root, 'artifacts/gastos-desktop.png'), fullPage: true });
+  await mkdir(resolve(artifactRoot, 'artifacts'), { recursive: true });
+  await owner.page.screenshot({ path: resolve(artifactRoot, 'artifacts/gastos-desktop.png'), fullPage: true });
   passed('Gastos: combustível, hospedagem antecipada e almoço somam R$ 880,00 sem criar atividades, em ordem decrescente de data.');
 
   await navigate(owner.page, 'Cronograma');
@@ -710,8 +715,8 @@ try {
   await expectTotal(owner.page, 'expenses-total', '880,00');
   await visibleText(owner.page, 'Teste piquenique');
   await navigate(owner.page, 'Cronograma');
-  await visibleText(owner.page, /1 gasto vinculado: R\$\s80,00 · orçamento a definir/);
-  await visibleText(owner.page, 'Nenhum gasto registrado');
+  await visibleText(owner.page, /1 gasto vinculado: R\$\s80,00 · sem orçamento original/);
+  await visibleText(owner.page, /ainda sem gastos registrados/);
   passed('Vincular o almoço mantém R$ 880,00, preserva o orçamento da atividade e aparece como detalhe no cronograma.');
 
   await navigate(owner.page, 'Gastos');
@@ -770,7 +775,7 @@ try {
   assert.equal(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal scrolling at 360px');
   assert.equal(await member.page.locator('table').first().isVisible(), false, 'the phone shows cards instead of a squeezed table');
   await expectTotal(member.page, 'expenses-total', '895,00');
-  await member.page.screenshot({ path: resolve(root, 'artifacts/gastos-mobile.png'), fullPage: true });
+  await member.page.screenshot({ path: resolve(artifactRoot, 'artifacts/gastos-mobile.png'), fullPage: true });
   await (await button(owner.page, 'Editar Teste gasolina')).click();
   expenseEdit = owner.page.getByRole('dialog', { name: 'Editar gasto' });
   await expenseEdit.getByLabel(/^Valor \(R\$\)/).fill('205,00');
@@ -1020,7 +1025,7 @@ try {
   await inviteDialog.getByRole('button', { name: 'Copiar link', exact: true }).click();
   await visibleText(inviteDialog, 'Selecione e copie o link para abrir no outro aparelho.');
   assert.equal(await inviteDialog.getByLabel('Link do convite', { exact: true }).evaluate(input => input.selectionEnd - input.selectionStart), collectionInviteUrl.length);
-  await owner.page.screenshot({ path: resolve(root, 'artifacts/convite-mobile.png'), fullPage: true });
+  await owner.page.screenshot({ path: resolve(artifactRoot, 'artifacts/convite-mobile.png'), fullPage: true });
   await inviteDialog.getByRole('button', { name: 'Fechar formulário', exact: true }).click();
   await owner.page.setViewportSize({ width: 1366, height: 900 });
   passed('O botão gera convites de viagem e coleção pelo domínio atual, copia ou seleciona o link, evita duplo envio e permite desativar um convite sem alterar os dados.');
@@ -1215,8 +1220,10 @@ try {
   assert.equal(trips.has(tripC.id),false);
   assert.equal([...expenses.values()].some(value=>value.trip_id===tripC.id),false);
   passed('A exclusão exige confirmação, explica a migração pendente e remove a viagem e seus gastos também dos aparelhos compartilhados.');
-  await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip: tripB, activities, trips, expenses, root });
+  await verifyScheduleReport({ page: owner.page, context: owner.context, appOrigin, trip: tripB, activities, trips, expenses, root: artifactRoot });
   passed('Relatório PNG: conteúdo e paginação, downloads e bytes iguais à prévia, filtros, viagem isolada, compartilhamento simulado, celular em pé e PWA offline.');
+  await verifyBudgetReservations({ page: owner.page, context: owner.context, appOrigin, trip: tripB, activities, trips, expenses, root: artifactRoot });
+  passed('Reserva: estimativa antes dos gastos, realizados depois, operações locais, atualização por foco em outro aparelho e cenário de referência isolado.');
   console.log(`Teste de navegador concluído: ${checks} grupos aprovados. Auth/Realtime/Photon reais não foram usados.`);
   }
 } catch (error) {

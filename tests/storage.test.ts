@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { clearSnapshot, readOfflineSnapshot, readOfflineSnapshots, readSnapshot, saveSnapshot, saveTripsSnapshot, readTripsSnapshot, pruneUnauthorizedSnapshots, rememberedTripId, type Snapshot } from '../lib/storage';
-import { EMPTY_PLACE, type Activity } from '../lib/types';
+import { tripBudgetView } from '../lib/budget';
+import { EMPTY_PLACE, type Activity, type Expense } from '../lib/types';
 class MemoryStorage {
   private items = new Map<string, string>();
   getItem(key: string) { return this.items.get(key) ?? null; }
@@ -144,6 +145,39 @@ test('a complete schedule may be exported offline independently of missing expen
   assert.equal(readSnapshot('couple', 'a')?.scheduleComplete, true);
   saveSnapshot({ ...snapshot('couple', 'b'), complete: true });
   assert.equal(readSnapshot('couple', 'b')?.scheduleComplete, true);
+});
+
+test('partial offline records stay readable without claiming complete spending or released reservations', () => {
+  localStorage.clear();
+  const source = snapshot('partial-budget', 'trip-budget');
+  source.trip.initial_budget_cents = 100000;
+  const activity: Activity = { ...EMPTY_PLACE, id: 'meal', trip_id: source.trip.id, name: 'Refeição', starts_at: '2026-10-10T15:00:00Z', budget_cents: 20000, type: 'Refeição', observation: null, version: 1 };
+  const expense: Expense = { id: 'paid', trip_id: source.trip.id, description: 'Conta', category: 'Alimentação', amount_cents: 13200, expense_date: '2026-10-10', activity_id: activity.id, notes: null, version: 1 };
+  const saved = { ...source, activities: [activity], expenses: [expense], scheduleComplete: true, expensesReady: true };
+  const viewOf = (cached: Snapshot) => tripBudgetView(cached.trip, cached.activities, cached.expensesReady ? cached.expenses : null);
+
+  // Old copies can contain an expense array without proving every server page was read.
+  saveSnapshot(saved);
+  const partial = readSnapshot(source.userId)!;
+  assert.equal(partial.complete, false);
+  assert.equal(partial.expensesReady, false);
+  assert.equal(partial.scheduleComplete, true, 'schedule exports retain their independent completeness');
+  assert.deepEqual(partial.activities, saved.activities);
+  assert.deepEqual(partial.expenses, saved.expenses);
+  const unknown = viewOf(partial);
+  for (const value of [unknown.spentCents, unknown.pendingCents, unknown.availableCents, unknown.freeCents, unknown.projectedCents, unknown.reservedPercent]) assert.equal(value, null);
+
+  saveSnapshot({ ...saved, complete: true });
+  const complete = readSnapshot(source.userId)!;
+  assert.equal(complete.expensesReady, true);
+  const known = viewOf(complete);
+  assert.equal(known.spentCents, 13200);
+  assert.equal(known.availableCents, 86800);
+  assert.equal(known.pendingCents, 0);
+  assert.equal(known.freeCents, 86800);
+
+  saveSnapshot({ ...saved, complete: true, expensesReady: false });
+  assert.equal(readSnapshot(source.userId)?.expensesReady, false, 'an explicit unknown expense state remains unknown');
 });
 test('updating cached metadata does not change the locally remembered open trip', () => {
   localStorage.clear();
